@@ -1,0 +1,111 @@
+/* GameBoard container styles */
+.gameboard-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background-color: #1a1d23; /* Dark background */
+  min-height: 100vh;
+  color: #fff;
+  font-family: "Arial", sans-serif;
+  padding: 10px;
+}
+
+/* Header styles */
+.gameboard-header {
+  font-size: 2rem;
+  margin-bottom: 20px;
+  color: #7c8ca4; /* Light blue-gray */
+  text-transform: uppercase;
+  letter-spacing: 2px;
+}
+
+/* Grid container */
+.gameboard-grid {
+  display: grid;
+  gap: 1px;
+  background-color: #1e1e1e; /* Darker grid background */
+  border: 1px solid #2b2b2b;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.5);
+}
+
+/* Cell styles */
+.gameboard-cell {
+  width: 25px;
+  height: 25px;
+  background-color: #1e1e1e; /* Default cell color */
+  border: 1px solid #2a2d34;
+  transition: background-color 0.2s, box-shadow 0.2s;
+  cursor: pointer;
+}
+
+/* Cell colors for different players */
+.cell-empty {
+  background-color: #1e1e1e;
+}
+
+.cell-user-owned {
+  background-color: #4caf50; /* Green */
+  box-shadow: inset 0 0 5px #2e7d32;
+}
+
+.cell-other-owned {
+  background-color: #f44336; /* Red */
+  box-shadow: inset 0 0 5px #b71c1c;
+}
+
+.cell-player-2 {
+  background-color: #2196f3; /* Blue */
+  box-shadow: inset 0 0 5px #1976d2;
+}
+
+.cell-player-3 {
+  background-color: #ff9800; /* Orange */
+  box-shadow: inset 0 0 5px #ef6c00;
+}
+
+.cell-player-4 {
+  background-color: #9c27b0; /* Purple */
+  box-shadow: inset 0 0 5px #7b1fa2;
+}
+
+/* Fort cell */
+.cell-fort {
+  background-color: #ffc107; /* Yellow */
+  box-shadow: 0 0 10px #ff9800;
+}
+
+.cell-fort-boundary {
+  background-color: blue; /* Boundary cell color */
+  border: 1px solid black;
+}
+
+.cell-fort-inner {
+  background-color: white; /* Inner cell color */
+  border: 1px dashed gray;
+}
+
+.cell-empty {
+  background-color: lightgray;
+  border: 1px solid darkgray;
+}
+
+.cell-user-owned {
+  background-color: green;
+  border: 1px solid darkgreen;
+}
+
+.cell-player-2 {
+  background-color: red;
+}
+
+.cell-player-3 {
+  background-color: yellow;
+}
+
+.cell-player-4 {
+  background-color: purple;
+}
+
+.cell-other-owned {
+  background-color: orange;
+}

@@ -1,0 +1,79 @@
+/* Base styles for the grid */
+.cell {
+    box-sizing: border-box;
+    border: 1px solid #ccc;
+    background-color: white;
+    cursor: pointer;
+    position: relative;
+    transition: background-color 0.2s ease, border 0.2s ease;
+  }
+  
+  /* Style for owned cells */
+  .cell-owned {
+    background-color: lightblue;
+    border: 1px solid #007bff; /* Blue border for claimed cells */
+    pointer-events: auto; /* Allow clicking */
+  }
+  
+  /* Style for fort borders (clickable) */
+  .cell-border {
+    background-color: #002766;
+    border: 1px solid navy; /* Darker blue border for fort edges */
+    pointer-events: auto; /* Allow clicking */
+    cursor: pointer; /* Show clickable cursor */
+  }
+  
+  /* Style for inner fort cells */
+  .cell-inner {
+    background-color: #f0f0f0;
+    border: 1px solid #bbb; /* Light border for inner cells */
+    pointer-events: none; /* Disable clicking */
+  }
+  
+  /* Style for cell levels */
+  .cell-level {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 12px;
+    font-weight: bold;
+    color: #000;
+    pointer-events: none; /* Prevent interfering with clicks */
+    text-shadow: 1px 1px 2px rgba(255, 255, 255, 0.8); /* Optional: Makes text readable */
+  }
+  
+  /* Tooltip for fort level */
+  .tooltip {
+    position: absolute;
+    background-color: rgba(0, 0, 0, 0.8); /* Semi-transparent black background */
+    color: white;
+    padding: 5px 10px;
+    border-radius: 4px;
+    font-size: 12px;
+    z-index: 1000;
+    pointer-events: none; /* Prevent tooltip from blocking mouse events */
+    white-space: nowrap;
+    box-shadow: 0px 4px 6px rgba(0, 0, 0, 0.1);
+  }
+  
+  
+  
+  /* Scrollable grid container */
+  .grid-scrollable {
+    overflow: auto;
+    width: 100vw;
+    height: 100vh;
+    background-color: #f8f9fa; /* Light background */
+  }
+  
+  /* Highlight cell on hover */
+  .cell:hover {
+    background-color: #e6f7ff; /* Light blue on hover */
+  }
+  
+  /* Disabled hover effect for non-clickable cells */
+  .cell-inner:hover {
+    background-color: inherit;
+  }
+  
