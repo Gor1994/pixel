@@ -2,7 +2,7 @@ from flask import Flask, request, jsonify, session
 from flask_socketio import SocketIO, emit, join_room, leave_room
 from uuid import uuid4
 from flask_cors import CORS
-from pymongo import MongoClient, UpdateOne
+from pymongo import MongoClient, UpdateOne, DeleteOne
 from datetime import datetime, timedelta
 import certifi
 from telegram import Update
@@ -532,6 +532,7 @@ def detect_and_mark_fort(start_cell):
 
     try:
             print("Final fort_data to emit:", fort_data)
+            print(f"🚀 ~ fort_data:", fort_data)
             socketio.emit("fort-detected", json.loads(json.dumps(fort_data, cls=CustomJSONEncoder)))
     except Exception as e:
             app.logger.error(f"Error emitting fort-detected: {e}")
@@ -554,7 +555,81 @@ def get_grid():
             cell["fort_level"] = fort_levels[cell["fort_id"]]
 
     return jsonify(cells)
-@app.route("/claim-cell", methods=["POST"])   
+
+
+
+def destroy_fort(fort_id):
+    """Destroy a fort and update related cells."""
+    # Fetch the fort details
+    fort = forts_collection.find_one({"fort_id": fort_id})
+    if not fort:
+        print(f"No fort found with ID: {fort_id}")
+        return False
+
+    # Remove the fort from the database
+    forts_collection.delete_one({"fort_id": fort_id})
+    print(f"Fort {fort_id} destroyed.")
+
+    # Fetch all cells associated with the fort
+    affected_cells = list(cells_collection.find({"fort_id": fort_id}))
+
+    # Prepare lists for deleted and updated cells
+    deleted_cells = []
+    remaining_cells = []
+
+    # Prepare bulk operations
+    bulk_operations = []
+
+    for cell in affected_cells:
+        # Check if the cell's level is 0
+        if cell.get("level", 1) == 0:
+            # Remove the cell from the collection if its level is 0
+            deleted_cells.append(cell["coordinates"])
+            bulk_operations.append(DeleteOne({"coordinates": cell["coordinates"]}))
+        else:
+            # Update the remaining cells to reset fort-related properties to False
+            remaining_cells.append(cell["coordinates"])
+            bulk_operations.append(
+                UpdateOne(
+                    {"coordinates": cell["coordinates"]},
+                    {"$set": {
+                        "is_border": False,
+                        "is_inner": False,
+                        "is_in_fort": False,
+                        "fort_id": None  # Remove the fort association
+                    }}
+                )
+            )
+
+    # Execute bulk operations
+    if bulk_operations:
+        try:
+            result = cells_collection.bulk_write(bulk_operations)
+            print(f"Bulk write result: {result.bulk_api_result}")
+        except Exception as e:
+            print(f"Error executing bulk write: {e}")
+            raise
+
+    # Notify clients about the destroyed fort
+    socketio.emit(
+        "fort-destroyed",
+        {
+            "fort_id": fort_id,
+            "affected_cells": remaining_cells,  # Cells that had their fort properties reset
+        }
+    )
+
+    # Notify clients about deleted cells
+    for coordinates in deleted_cells:
+        print(f"🚀 ~ coordinates:", coordinates)
+        socketio.emit("cell-deleted", {"coordinates": coordinates})
+
+    return True
+
+
+
+
+@app.route("/claim-cell", methods=["POST"])
 def claim_cell_with_energy():
     """Handle cell clicks with energy validation."""
     data = request.json
@@ -567,7 +642,6 @@ def claim_cell_with_energy():
 
     # Fetch user energy details
     user = users_collection.find_one({"telegram_user_id": int(user_id)})
-    print(f"🚀 ~ user:", user)
     if not user:
         print("❌ Player not found in the database.")
         return jsonify({"error": "Player not initialized: User not found"}), 416
@@ -613,15 +687,43 @@ def claim_cell_with_energy():
     cell_coordinates = f"{row}-{col}"
     cell = cells_collection.find_one({"coordinates": cell_coordinates})
     if cell:
-        if cell["user_id"] == user_id:
+        # Cell is already claimed
+        if cell["user_id"] != user_id:
+            # Decrease the cell level if owned by another user
+            new_level = cell.get("level", 0) - 1
+            if new_level <= 0:
+                # If level reaches 0, remove the cell from the database
+                cells_collection.delete_one({"coordinates": cell_coordinates})
+
+                # Notify clients about the deleted cell
+                socketio.emit("cell-deleted", {"coordinates": cell_coordinates})
+
+                # Check if the cell was part of a fort
+                if cell.get("is_in_fort"):
+                    fort_id = cell.get("fort_id")
+                    # Destroy the fort if the cell was part of it
+                    destroy_fort(fort_id)
+            else:
+                # Decrease the level and keep ownership
+                cells_collection.update_one(
+                    {"coordinates": cell_coordinates},
+                    {"$set": {"level": new_level}}
+                )
+                # Notify clients about the updated cell
+                updated_cell = cells_collection.find_one({"coordinates": cell_coordinates}, {"_id": 0})
+                socketio.emit("cell-updated", updated_cell)
+        else:
+            # If clicked by the same user, increment the cell level
             new_level = cell.get("level", 0) + 1
             cells_collection.update_one(
                 {"coordinates": cell_coordinates},
-                {"$set": {"level": new_level, "color": user.get("color")}}  # Add color field
+                {"$set": {"level": new_level, "color": user.get("color")}}
             )
-        else:
-            return jsonify({"error": "Cell owned by another user"}), 466
+            # Notify clients about the updated cell
+            updated_cell = cells_collection.find_one({"coordinates": cell_coordinates}, {"_id": 0})
+            socketio.emit("cell-updated", updated_cell)
     else:
+        # Cell is not claimed, claim it
         cells_collection.insert_one({
             "coordinates": cell_coordinates,
             "user_id": user_id,
@@ -629,12 +731,12 @@ def claim_cell_with_energy():
             "is_in_fort": False,
             "color": user.get("color"),  # Include the user's color
         })
+        # Notify clients about the newly claimed cell
+        updated_cell = cells_collection.find_one({"coordinates": cell_coordinates}, {"_id": 0})
+        socketio.emit("cell-updated", updated_cell)
 
     detect_and_mark_fort((row, col))
-    # Broadcast updated cell to all connected clients
-    updated_cell = cells_collection.find_one({"coordinates": cell_coordinates}, {"_id": 0})
-    print(f"updatedCell", updated_cell)
-    socketio.emit("cell-updated", updated_cell)
+
     return jsonify({
         "success": True,
         "energy_remaining": {
@@ -642,6 +744,10 @@ def claim_cell_with_energy():
             "clicks_in_current_charge": remaining_clicks_in_charge,
         }
     }), 200
+
+
+
+
 @app.route("/recharge-energy", methods=["POST"])
 def recharge_energy():
     """Recharge energy for the player based on elapsed time."""

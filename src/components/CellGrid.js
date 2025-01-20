@@ -49,7 +49,6 @@ const CellGrid = ({ gridSize = 2000, cellSize = 20 }) => {
   }, []);
 
   useEffect(() => {
-    
     // Listen for cell updates
     socket.on("cell-updated", (updatedCell) => {
       if (!updatedCell || !updatedCell.coordinates) {
@@ -62,41 +61,78 @@ const CellGrid = ({ gridSize = 2000, cellSize = 20 }) => {
       }));
     });
   
-    // Listen for fort updates
-    socket.on("fort-detected", (fortData) => {
-      console.log("Fort detected:", fortData);
+    // Listen for fort destructions
+    socket.on("fort-destroyed", ({ fort_id, affected_cells }) => {
+      console.log("Fort destroyed:", fort_id);
   
-      // Update the grid with the fort's border and inner cells
       setGrid((prevGrid) => {
         const updatedGrid = { ...prevGrid };
   
+        // Update remaining affected cells (remove fort properties)
+        if (affected_cells) {
+          affected_cells.forEach((coordinates) => {
+            if (updatedGrid[coordinates]) {
+              // Remove fort-related properties but keep the cell
+              updatedGrid[coordinates] = {
+                ...updatedGrid[coordinates],
+                is_border: false,
+                is_inner: false,
+                is_in_fort: false,
+                fort_id: null,
+              };
+            }
+          });
+        }
+  
+        return updatedGrid;
+      });
+    });
+
+    socket.on("fort-detected", (fortData) => {
+      console.log("Fort detected:", fortData);
+    
+      setGrid((prevGrid) => {
+        const updatedGrid = { ...prevGrid };
+    
         // Update border cells
         fortData.border_cells.forEach((coord) => {
           updatedGrid[coord] = {
-            ...updatedGrid[coord],
+            ...updatedGrid[coord], // Retain existing data if any
             is_border: true,
             is_in_fort: true,
             fort_id: fortData.fort_id,
             level: fortData.level,
           };
         });
-  
+    
         // Update inner cells
         fortData.inner_cells.forEach((coord) => {
           updatedGrid[coord] = {
-            ...updatedGrid[coord],
+            ...updatedGrid[coord], // Retain existing data if any
             is_inner: true,
             is_in_fort: true,
             fort_id: fortData.fort_id,
           };
         });
-  
+    
         return updatedGrid;
       });
     });
   
+    // Listen for cell deletions
+    socket.on("cell-deleted", ({ coordinates }) => {
+      setGrid((prevGrid) => {
+        const newGrid = { ...prevGrid };
+        delete newGrid[coordinates];
+        return newGrid;
+      });
+    });
+  
+    // Cleanup function
     return () => {
-      socket.disconnect();
+      socket.off("cell-updated");
+      socket.off("fort-destroyed");
+      socket.off("cell-deleted");
     };
   }, []);
   
