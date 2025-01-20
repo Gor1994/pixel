@@ -3,6 +3,15 @@ import { FixedSizeGrid as Grid } from "react-window";
 import { AuthContext } from "../contexts/AuthContext";
 import "../styles/CellGrid.css";
 import "../styles/Login.css";
+import { io } from "socket.io-client";
+
+// const socket = io("ws://rbiz.pro");
+const socket = io("ws://rbiz.pro", {
+  transports: ["websocket"], // Force WebSocket transport
+  upgrade: true,
+});
+
+
 
 const CellGrid = ({ gridSize = 2000, cellSize = 20 }) => {
   const { userId, username, setUserId, setUsername, logout } = useContext(AuthContext);
@@ -22,7 +31,7 @@ const CellGrid = ({ gridSize = 2000, cellSize = 20 }) => {
   useEffect(() => {
     const fetchGrid = async () => {
       try {
-        const response = await fetch("http://127.0.0.1:5000/get-grid");
+        const response = await fetch("http://rbiz.pro/api/get-grid");
         const data = await response.json();
 
         const gridData = {};
@@ -39,40 +48,113 @@ const CellGrid = ({ gridSize = 2000, cellSize = 20 }) => {
     fetchGrid();
   }, []);
 
+  useEffect(() => {
+    
+    // Listen for cell updates
+    socket.on("cell-updated", (updatedCell) => {
+      if (!updatedCell || !updatedCell.coordinates) {
+        console.error("Invalid cell data received:", updatedCell);
+        return;
+      }
+      setGrid((prevGrid) => ({
+        ...prevGrid,
+        [updatedCell.coordinates]: updatedCell,
+      }));
+    });
+  
+    // Listen for fort updates
+    socket.on("fort-detected", (fortData) => {
+      console.log("Fort detected:", fortData);
+  
+      // Update the grid with the fort's border and inner cells
+      setGrid((prevGrid) => {
+        const updatedGrid = { ...prevGrid };
+  
+        // Update border cells
+        fortData.border_cells.forEach((coord) => {
+          updatedGrid[coord] = {
+            ...updatedGrid[coord],
+            is_border: true,
+            is_in_fort: true,
+            fort_id: fortData.fort_id,
+            level: fortData.level,
+          };
+        });
+  
+        // Update inner cells
+        fortData.inner_cells.forEach((coord) => {
+          updatedGrid[coord] = {
+            ...updatedGrid[coord],
+            is_inner: true,
+            is_in_fort: true,
+            fort_id: fortData.fort_id,
+          };
+        });
+  
+        return updatedGrid;
+      });
+    });
+  
+    return () => {
+      socket.disconnect();
+    };
+  }, []);
+  
+
   // Restore authentication state
   useEffect(() => {
     const restoreAuthState = async () => {
       try {
-        const response = await fetch("http://127.0.0.1:5000/check-login", {
-          method: "GET",
-          headers: {
-            Authorization: `Bearer ${localStorage.getItem("token")}`,
-          },
-        });
-
-        if (response.ok) {
-          const data = await response.json();
-          setUserId(data.userId);
-          setUsername(data.username);
-        } else {
+        const token = localStorage.getItem("token");
+        if (!token) {
+          console.error("No token found in localStorage");
           setUserId(null);
           setUsername("");
-          console.log("User is not logged in");
+          return;
+        }
+        
+        const response = await fetch("http://rbiz.pro/api/check-login", {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+  
+        console.log("Response status:", response.status);
+  
+        if (response.ok) {
+          if (response.headers.get("Content-Type")?.includes("application/json")) {
+            const data = await response.json();
+            console.log("User data:", data);
+            setUserId(data.userId);
+            setUsername(data.username);
+          } else {
+            console.error("Non-JSON response received");
+            setUserId(null);
+            setUsername("");
+          }
+        } else {
+          console.error("Failed to restore auth state. Status:", response.status);
+          setUserId(null);
+          setUsername("");
         }
       } catch (error) {
         console.error("Error restoring authentication state:", error);
+        setUserId(null);
+        setUsername("");
       } finally {
         setLoading(false);
       }
     };
-
+  
     restoreAuthState();
-  }, [setUserId, setUsername, userId]);
+  }, []);
+  
 
   // Fetch energy details
   const fetchEnergy = async () => {
     try {
-      const response = await fetch("http://127.0.0.1:5000/get-energy", {
+      const response = await fetch("http://rbiz.pro/api/get-energy", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -101,7 +183,7 @@ const CellGrid = ({ gridSize = 2000, cellSize = 20 }) => {
   const requestLoginCode = async () => {
     setIsRequestingCode(true);
     try {
-      const response = await fetch("http://127.0.0.1:5000/request-login-code", {
+      const response = await fetch("http://rbiz.pro/api/request-login-code", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ identifier: identifier.trim() }),
@@ -126,7 +208,7 @@ const CellGrid = ({ gridSize = 2000, cellSize = 20 }) => {
   // Verify login code
   const verifyLoginCode = async () => {
     try {
-      const response = await fetch("http://127.0.0.1:5000/verify-login-code", {
+      const response = await fetch("http://rbiz.pro/api/verify-login-code", {
         method: "POST",
         body: JSON.stringify({ identifier: identifier.trim(), code: loginCode.trim() }),
         headers: {
@@ -173,7 +255,7 @@ const CellGrid = ({ gridSize = 2000, cellSize = 20 }) => {
       }
 
       try {
-        const response = await fetch("http://127.0.0.1:5000/claim-cell", {
+        const response = await fetch("http://rbiz.pro/api/claim-cell", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -181,9 +263,12 @@ const CellGrid = ({ gridSize = 2000, cellSize = 20 }) => {
           },
           body: JSON.stringify({ row, col, userId }),
         });
+        const responseText = await response.text(); // Log the raw response
+        console.log("Response text:", responseText);
 
         if (response.ok) {
-          const updatedGrid = await fetch("http://127.0.0.1:5000/get-grid");
+          const updatedGrid = await fetch("http://rbiz.pro/api/get-grid");
+          console.log("🚀 ~ updatedGrid:", updatedGrid)
           const data = await updatedGrid.json();
 
           const gridData = {};
@@ -238,14 +323,21 @@ const CellGrid = ({ gridSize = 2000, cellSize = 20 }) => {
   const Cell = ({ columnIndex, rowIndex, style }) => {
     const cellKey = `${rowIndex}-${columnIndex}`;
     const cell = grid[cellKey] || {};
-
+  
+    // Determine styles based on cell properties
+    const cellStyles = {
+      ...style,
+      width: `${cellSize}px`,
+      height: `${cellSize}px`,
+      backgroundColor: cell.color || "transparent", // Apply the cell's color or transparent
+      border: cell.is_border
+        ? `2px solid ${cell.color || "black"}` // Border color matches the cell's color
+        : "1px solid #ddd", // Default border
+    };
+  
     return (
       <div
-        style={{
-          ...style,
-          width: `${cellSize}px`,
-          height: `${cellSize}px`,
-        }}
+        style={cellStyles}
         className={`cell ${
           cell.is_border ? "cell-border" : ""
         } ${cell.is_inner ? "cell-inner" : ""} ${
@@ -259,6 +351,7 @@ const CellGrid = ({ gridSize = 2000, cellSize = 20 }) => {
       </div>
     );
   };
+  
 
   if (loading) {
     return <div className="loading-indicator">Loading...</div>;

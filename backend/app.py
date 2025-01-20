@@ -1,11 +1,12 @@
 from flask import Flask, request, jsonify, session
+from flask_socketio import SocketIO, emit, join_room, leave_room
 from uuid import uuid4
 from flask_cors import CORS
 from pymongo import MongoClient, UpdateOne
 from datetime import datetime, timedelta
 import certifi
 from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, ContextTypes, Defaults
 from threading import Thread
 import random
 import secrets
@@ -13,13 +14,28 @@ import logging
 import requests
 import asyncio
 from flask_session import Session
-
+import json
+from bson import ObjectId
+from multiprocessing import Process
 
 app = Flask(__name__)
-CORS(app, supports_credentials=True, resources={r"/*": {"origins": "http://localhost:3000"}})
+# CORS(app, supports_credentials=True, resources={r"/*": {"origins": "http://195.133.146.186/"}})
+#CORS(app)
 
+socketio = SocketIO(app, async_mode="gevent", cors_allowed_origins="*")
+
+#socketio = SocketIO(app, cors_allowed_origins="*", logger=True, engineio_logger=True)
+#socketio = SocketIO(app, cors_allowed_origins="*")
+CORS(app, supports_credentials=True)
 app.secret_key = "aaa"
 import os
+class CustomJSONEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, ObjectId):
+            return str(obj)
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        return super().default(obj)
 
 SESSION_FILE_DIR = './flask_session'
 if not os.path.exists(SESSION_FILE_DIR):
@@ -60,7 +76,6 @@ telegram_app_TOKEN = '8076325725:AAHqtb8Z7mJu56NEceWYtLTvD1h-2rI3_Wg'
 # Correctly initialize the Telegram Bot Application
 telegram_app = Application.builder().token(telegram_app_TOKEN).build()
 
-
 # Constants
 CODE_VALIDITY_MINUTES = 5  # Code expiration time
 
@@ -69,6 +84,9 @@ CODE_VALIDITY_MINUTES = 5  # Code expiration time
 def generate_login_code():
     return f"{random.randint(100000, 999999)}"
 
+def generate_random_color_hex():
+    """Generate a random hex color code."""
+    return f"#{random.randint(0, 0xFFFFFF):06x}"
 
 # Send login code to Telegram
 async def send_login_code_to_telegram(telegram_user_id, code):
@@ -246,82 +264,93 @@ def logout():
     return jsonify({"message": "Logged out successfully"}), 200
 
 # Telegram Bot Handlers
-async def start(update: ContextTypes.DEFAULT_TYPE, context):
-    """Handle the /start command to store Telegram user details and initialize energy."""
-    telegram_user_id = update.effective_user.id
-    telegram_username = update.effective_user.username or "Unknown"
+#async def start(update: ContextTypes.DEFAULT_TYPE, context):
+#   """Handle the /start command to store Telegram user details and initialize energy."""
+#    telegram_user_id = update.effective_user.id
+#   telegram_username = update.effective_user.username or "Unknown"
+#   print(f"staaaaaaaaaaaaart")
+#   # Default energy setup
+#   initial_energy = {
+#       "charges": 4,
+#       "clicks_per_charge": 500,
+#       "last_click_timestamp": datetime.utcnow(),
+#       "last_recharge_timestamp": datetime.utcnow(),
+#   }
 
-    # Default energy setup
-    initial_energy = {
-        "charges": 4,
-        "clicks_per_charge": 500,
-        "last_click_timestamp": datetime.utcnow(),
-        "last_recharge_timestamp": datetime.utcnow(),
-    }
+    # Generate a random color hex
+#    random_color_hex = generate_random_color_hex()
 
     # Check if the user already exists in the database
-    existing_user = users_collection.find_one({"telegram_user_id": telegram_user_id})
+#    existing_user = users_collection.find_one({"telegram_user_id": telegram_user_id})
 
-    if existing_user:
-        await update.message.reply_text(f"Welcome back, {telegram_username}!")
+#    if existing_user:
+#        await update.message.reply_text(f"Welcome back, {telegram_username}!")
         
         # Check and initialize energy if not already present
-        if "energy" not in existing_user:
-            print(f"Initializing energy for user {telegram_user_id}.")
-            result = users_collection.update_one(
-                {"telegram_user_id": int(telegram_user_id)},
-                {
-                    "$set": {"energy": initial_energy},  # This ensures the energy field is added/updated
-                },
-                upsert=True
-            )
-            if result.matched_count > 0 or result.upserted_id:
-                print(f"✅ Energy initialized for user {telegram_user_id}. Result: {result.raw_result}")
-                await update.message.reply_text("Your energy system has been initialized!")
-            else:
-                print(f"❌ Failed to initialize energy for user {telegram_user_id}. Result: {result.raw_result}")
-    else:
-        # Create a new user entry with energy
-        user_data = {
-            "telegram_user_id": telegram_user_id,
-            "telegram_username": telegram_username,
-            "registered_at": datetime.utcnow().isoformat(),
-            "energy": initial_energy,
-        }
-        result = users_collection.insert_one(user_data)
-        if result.acknowledged:
-            print(f"✅ User {telegram_user_id} registered with initial energy.")
-            await update.message.reply_text(f"Welcome, {telegram_username}! You have been registered, and your energy system is ready.")
-        else:
-            print(f"❌ Failed to register user {telegram_user_id}.")
+#        update_fields = {}
+#        if "energy" not in existing_user:
+#            print(f"Initializing energy for user {telegram_user_id}.")
+#            update_fields["energy"] = initial_energy
+        
+        # Check and assign color if not already present
+#        if "color" not in existing_user:
+#            print(f"Assigning random color to user {telegram_user_id}.")
+#            update_fields["color"] = random_color_hex
+        
+        # Update the user document if necessary
+#        if update_fields:
+#            result = users_collection.update_one(
+#                {"telegram_user_id": int(telegram_user_id)},
+#                {"$set": update_fields},
+#                upsert=True
+#            )
+#            if result.matched_count > 0 or result.upserted_id:
+#                print(f"✅ Updates applied for user {telegram_user_id}: {update_fields}.")
+#                await update.message.reply_text("Your profile has been updated!")
+#            else:
+#                print(f"❌ Failed to update user {telegram_user_id}. Result: {result.raw_result}")
+#    else:
+        # Create a new user entry with energy and color
+#        user_data = {
+#            "telegram_user_id": telegram_user_id,
+#            "telegram_username": telegram_username,
+#            "registered_at": datetime.utcnow().isoformat(),
+#            "energy": initial_energy,
+#            "color": random_color_hex,
+#        }
+#        result = users_collection.insert_one(user_data)
+#        if result.acknowledged:
+#            print(f"✅ User {telegram_user_id} registered with initial energy and color.")
+#            await update.message.reply_text(
+#                f"Welcome, {telegram_username}! You have been registered, "
+#                f"and your energy system and profile color are ready."
+#            )
+#        else:
+#            print(f"❌ Failed to register user {telegram_user_id}.")
 
-    print(f"User {telegram_username} with ID {telegram_user_id} started the bot.")
+#    print(f"User {telegram_username} with ID {telegram_user_id} started the bot.")
 
-
-telegram_app.add_handler(CommandHandler("start", start))
+#telegram_app.add_handler(CommandHandler("start", start))
 
 # Handle unknown commands
-async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle unknown commands."""
-    await update.message.reply_text("Sorry, I didn't understand that command.")
+#async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+#    """Handle unknown commands."""
+#    await update.message.reply_text("Sorry, I didn't understand that command.")
 
 
-def start_telegram_bot():
-    """Start the Telegram bot."""
-    # Initialize the bot application
-    application = Application.builder().token(telegram_app_TOKEN).build()
-
-    # Add handlers
-    application.add_handler(CommandHandler("start", start))
-
-    print("Starting Telegram bot...")
-
-    # Manually create and set an event loop for this thread
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-
-    # Run the bot in the thread's event loop without signal handlers
-    loop.run_until_complete(application.run_polling(allowed_updates=None, stop_signals=None))
+#def start_telegram_bot():
+#    """Start the Telegram bot."""
+#    try:
+#        print("Starting Telegram bot...")
+        #loop = asyncio.new_event_loop()
+        #asyncio.set_event_loop(loop)
+#        #loop.run_until_complete(telegram_app.run_polling())
+#        asyncio.run(telegram_app.run_polling())
+#        print("Telegram bot started successfully.")
+#    except telegram.error.Conflict as e:
+#        print("Telegram bot conflict error. Ensure no other instance is running.")
+#    except Exception as e:
+#        print(f"Error starting Telegram bot: {e}")
 
 
 
@@ -344,11 +373,9 @@ def fetch_grid_as_dict():
         row, col = map(int, cell["coordinates"].split("-"))
         grid[(row, col)] = cell
     return grid
-
-from uuid import uuid4
-
 def detect_and_mark_fort(start_cell):
-    """Detect and mark forts (rectangles) with a minimum size, while handling overlapping or enclosed forts."""
+    """Detect and mark forts (rectangles) with a minimum size, while handling overlapping or enclosed forts.
+    Can detect forts even when there are extra connected cells outside the rectangle."""
     grid = fetch_grid_as_dict()  # Fetch the current grid state from MongoDB
     visited = set()  # Track visited cells
 
@@ -369,131 +396,146 @@ def detect_and_mark_fort(start_cell):
 
         return component
 
+    def find_largest_rectangle(cells):
+        """Find the largest valid rectangle within a set of connected cells."""
+        if not cells:
+            return None
+
+        # Convert cells to a sorted list of coordinates
+        cells_list = sorted(list(cells))
+        min_row = min(r for r, _ in cells_list)
+        max_row = max(r for r, _ in cells_list)
+        min_col = min(c for _, c in cells_list)
+        max_col = max(c for _, c in cells_list)
+
+        best_rectangle = None
+        max_area = 0
+
+        # Try all possible rectangles within the bounds
+        for top in range(min_row, max_row + 1):
+            for bottom in range(top + FORT_MIN_SIZE - 1, max_row + 1):
+                for left in range(min_col, max_col + 1):
+                    for right in range(left + FORT_MIN_SIZE - 1, max_col + 1):
+                        # Check if this rectangle is valid
+                        is_valid = True
+                        border_cells = set()
+                        inner_cells = set()
+
+                        # Check all cells in the potential rectangle
+                        for r in range(top, bottom + 1):
+                            for c in range(left, right + 1):
+                                if r == top or r == bottom or c == left or c == right:
+                                    if (r, c) not in cells:
+                                        is_valid = False
+                                        break
+                                    border_cells.add((r, c))
+                                else:
+                                    inner_cells.add((r, c))
+                            if not is_valid:
+                                break
+
+                        # Check minimum size and at least one inner cell
+                        if (not is_valid or 
+                            bottom - top + 1 < FORT_MIN_SIZE or 
+                            right - left + 1 < FORT_MIN_SIZE or
+                            not inner_cells):
+                            continue
+
+                        # Calculate area
+                        area = (bottom - top + 1) * (right - left + 1)
+                        if area > max_area:
+                            max_area = area
+                            best_rectangle = {
+                                'top': top,
+                                'bottom': bottom,
+                                'left': left,
+                                'right': right,
+                                'border_cells': border_cells,
+                                'inner_cells': inner_cells
+                            }
+
+        return best_rectangle
+
     # Start detection from the specified cell
     start_row, start_col = start_cell
     connected_cells = dfs(start_row, start_col)
 
-    # Group cells by rows
-    rows = {}
-    for r, c in connected_cells:
-        if r not in rows:
-            rows[r] = []
-        rows[r].append(c)
+    # Find the largest valid rectangle within connected cells
+    rectangle = find_largest_rectangle(connected_cells)
+    
+    if not rectangle:
+        return False
 
-    # Sort rows and their columns
-    for r in rows:
-        rows[r] = sorted(rows[r])
+    # Convert coordinate tuples to string format for database
+    border_cells = [f"{r}-{c}" for r, c in rectangle['border_cells']]
+    inner_cells = [f"{r}-{c}" for r, c in rectangle['inner_cells']]
 
-    # Check for rectangles
-    row_indices = sorted(rows.keys())
-    for start_row_idx in range(len(row_indices)):
-        for end_row_idx in range(start_row_idx + FORT_MIN_SIZE - 1, len(row_indices)):
-            start_row = row_indices[start_row_idx]
-            end_row = row_indices[end_row_idx]
+    # Generate a unique fort_id
+    new_fort_id = str(uuid4())
 
-            # Check if all required rows exist
-            if not all(row in rows for row in range(start_row, end_row + 1)):
-                continue
+    # Calculate fort level based on the minimum level of border cells
+    fort_level = min(
+        [grid.get((int(coord.split('-')[0]), int(coord.split('-')[1])), {}).get("level", 1) for coord in border_cells]
+    )
 
-            # Determine the column range for the rectangle
-            start_col = min(min(rows[row]) for row in range(start_row, end_row + 1))
-            end_col = max(max(rows[row]) for row in range(start_row, end_row + 1))
+    # Generate the fort data
+    fort_data = {
+        "fort_id": new_fort_id,
+        "user_id": grid.get((start_row, start_col), {}).get("user_id"),
+        "border_cells": border_cells,
+        "inner_cells": inner_cells,
+        "level": fort_level,
+        "created_at": datetime.utcnow()
+    }
 
-            # Ensure the rectangle meets the minimum size requirements
-            if (end_row - start_row + 1) < FORT_MIN_SIZE or (end_col - start_col + 1) < FORT_MIN_SIZE:
-                continue
+    # Check for existing inner forts
+    overlapping_forts = list(forts_collection.find({"border_cells": {"$in": inner_cells}}))
+    if overlapping_forts:
+        print(f"❌ Cannot create fort from ({rectangle['top']}, {rectangle['left']}) to ({rectangle['bottom']}, {rectangle['right']}) because it encloses another fort.")
+        
+        # Retrieve all existing cells for this fort
+        existing_cells = list(cells_collection.find({"coordinates": {"$in": border_cells + inner_cells}}))
+        existing_fort_ids = {cell["coordinates"] for cell in existing_cells if "fort_id" in cell}
 
-            # Identify border and inner cells
-            border_cells = []
-            inner_cells = []
+        # Remove only the cells without a valid fort_id in bulk
+        cells_to_remove = [cell for cell in (border_cells + inner_cells) if cell not in existing_fort_ids]
+        if cells_to_remove:
+            cells_collection.delete_many({"coordinates": {"$in": cells_to_remove}})
 
-            for r in range(start_row, end_row + 1):
-                for c in range(start_col, end_col + 1):
-                    if r == start_row or r == end_row or c == start_col or c == end_col:
-                        border_cells.append(f"{r}-{c}")
-                    else:
-                        inner_cells.append(f"{r}-{c}")
+        return False
 
-            # Generate a unique `fort_id` for this fort
-            new_fort_id = str(uuid4())
+    # Proceed to store the fort in the `forts` collection
+    forts_collection.insert_one(fort_data)
 
-            # Validate the borders of the rectangle
-            is_valid_rectangle = True
+    # Prepare bulk operations for `owned_cells` update
+    bulk_operations = []
+    for cell in border_cells:
+        bulk_operations.append(
+            UpdateOne(
+                {"coordinates": cell},
+                {"$set": {"is_border": True, "is_inner": False, "is_in_fort": True, "fort_id": new_fort_id}},
+                upsert=True
+            )
+        )
+    for cell in inner_cells:
+        bulk_operations.append(
+            UpdateOne(
+                {"coordinates": cell},
+                {"$set": {"is_border": False, "is_inner": True, "is_in_fort": True, "fort_id": new_fort_id}},
+                upsert=True
+            )
+        )
+    if bulk_operations:
+        cells_collection.bulk_write(bulk_operations)
 
-            # Check top and bottom rows (must be fully filled across start_col to end_col)
-            if not all((start_row, col) in connected_cells for col in range(start_col, end_col + 1)):
-                is_valid_rectangle = False
-            if not all((end_row, col) in connected_cells for col in range(start_col, end_col + 1)):
-                is_valid_rectangle = False
+    print(f"✅ Fort added to database: {fort_data}")
 
-            # Check left and right columns (must be fully filled from start_row to end_row)
-            if not all((row, start_col) in connected_cells for row in range(start_row, end_row + 1)):
-                is_valid_rectangle = False
-            if not all((row, end_col) in connected_cells for row in range(start_row, end_row + 1)):
-                is_valid_rectangle = False
-
-            if is_valid_rectangle:
-                print(f"🏰 Detected valid rectangle from ({start_row}, {start_col}) to ({end_row}, {end_col})")
-
-                # Calculate fort level based on the minimum level of border cells
-                fort_level = min(
-                    [grid.get((int(coord.split('-')[0]), int(coord.split('-')[1])), {}).get("level", 1) for coord in border_cells]
-                )
-                # Generate the fort data
-                fort_data = {
-                    "fort_id": new_fort_id,
-                    "user_id": grid.get((start_row, start_col), {}).get("user_id"),
-                    "border_cells": border_cells,
-                    "inner_cells": inner_cells,
-                    "level": fort_level,
-                    "created_at": datetime.utcnow(),
-                }
-
-                # Check for existing inner forts
-                overlapping_forts = list(forts_collection.find({"border_cells": {"$in": inner_cells}}))
-                if overlapping_forts:
-                    print(f"❌ Cannot create larger fort from ({start_row}, {start_col}) to ({end_row}, {end_col}) because it encloses another fort.")
-
-                    # Retrieve all existing cells for this larger fort
-                    existing_cells = list(cells_collection.find({"coordinates": {"$in": border_cells + inner_cells}}))
-                    existing_fort_ids = {cell["coordinates"] for cell in existing_cells if "fort_id" in cell}
-
-                    # Remove only the cells without a valid fort_id in bulk
-                    cells_to_remove = [cell for cell in (border_cells + inner_cells) if cell not in existing_fort_ids]
-                    if cells_to_remove:
-                        cells_collection.delete_many({"coordinates": {"$in": cells_to_remove}})
-
-                    # Do not add the larger fort
-                    return False
-
-                # Proceed to store the fort in the `forts` collection
-                forts_collection.insert_one(fort_data)
-
-                # Prepare bulk operations for `owned_cells` update
-                bulk_operations = []
-                for cell in border_cells:
-                    bulk_operations.append(
-                        UpdateOne(
-                            {"coordinates": cell},
-                            {"$set": {"is_border": True, "is_inner": False, "is_in_fort": True, "fort_id": new_fort_id}},
-                            upsert=True
-                        )
-                    )
-                for cell in inner_cells:
-                    bulk_operations.append(
-                        UpdateOne(
-                            {"coordinates": cell},
-                            {"$set": {"is_border": False, "is_inner": True, "is_in_fort": True, "fort_id": new_fort_id}},
-                            upsert=True
-                        )
-                    )
-                if bulk_operations:
-                    cells_collection.bulk_write(bulk_operations)
-
-                print(f"✅ Fort added to database: {fort_data}")
-                return True  # A valid fort has been detected
-
-    return False  # No fort detected
+    try:
+            print("Final fort_data to emit:", fort_data)
+            socketio.emit("fort-detected", json.loads(json.dumps(fort_data, cls=CustomJSONEncoder)))
+    except Exception as e:
+            app.logger.error(f"Error emitting fort-detected: {e}")
+    return True
 
 
 
@@ -505,7 +547,7 @@ def get_grid():
 
     # Map fort_id to fort_level
     fort_levels = {fort["fort_id"]: fort["level"] for fort in forts}
-
+    print(f"hereeeeeeeeeeeeeee")
     # Add fort_level to each cell if it belongs to a fort
     for cell in cells:
         if "fort_id" in cell and cell["fort_id"] in fort_levels:
@@ -573,7 +615,10 @@ def claim_cell_with_energy():
     if cell:
         if cell["user_id"] == user_id:
             new_level = cell.get("level", 0) + 1
-            cells_collection.update_one({"coordinates": cell_coordinates}, {"$set": {"level": new_level}})
+            cells_collection.update_one(
+                {"coordinates": cell_coordinates},
+                {"$set": {"level": new_level, "color": user.get("color")}}  # Add color field
+            )
         else:
             return jsonify({"error": "Cell owned by another user"}), 466
     else:
@@ -582,10 +627,14 @@ def claim_cell_with_energy():
             "user_id": user_id,
             "level": 1,
             "is_in_fort": False,
+            "color": user.get("color"),  # Include the user's color
         })
 
     detect_and_mark_fort((row, col))
-
+    # Broadcast updated cell to all connected clients
+    updated_cell = cells_collection.find_one({"coordinates": cell_coordinates}, {"_id": 0})
+    print(f"updatedCell", updated_cell)
+    socketio.emit("cell-updated", updated_cell)
     return jsonify({
         "success": True,
         "energy_remaining": {
@@ -654,9 +703,8 @@ def get_energy():
     return jsonify({"energy": user["energy"]}), 200
 
 if __name__ == "__main__":
-    # Start Telegram bot in a separate thread
-    bot_thread = Thread(target=start_telegram_bot, daemon=True)
-    bot_thread.start()
+    from gevent import monkey
+    monkey.patch_all()
 
-    # Start Flask app
-    app.run(debug=True, use_reloader=False)
+    print("Starting Flask app with gevent...")
+    socketio.run(app, host="0.0.0.0", port=5000)
