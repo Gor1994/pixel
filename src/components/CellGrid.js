@@ -26,6 +26,8 @@ const CellGrid = ({ gridSize = 2000, cellSize = 20 }) => {
   const [identifier, setIdentifier] = useState("");
   const [loading, setLoading] = useState(true);
   const [energy, setEnergy] = useState({ charges: 0, remaining_clicks_in_charge: 0 });
+  const [userLevel, setUserLevel] = useState(null); // Initialize user level state
+
 
   // Fetch grid data
   useEffect(() => {
@@ -55,9 +57,13 @@ const CellGrid = ({ gridSize = 2000, cellSize = 20 }) => {
         console.error("Invalid cell data received:", updatedCell);
         return;
       }
+  
       setGrid((prevGrid) => ({
         ...prevGrid,
-        [updatedCell.coordinates]: updatedCell,
+        [updatedCell.coordinates]: {
+          ...prevGrid[updatedCell.coordinates], // Retain existing properties if any
+          ...updatedCell, // Overwrite with new cell data, including level
+        },
       }));
     });
   
@@ -87,13 +93,14 @@ const CellGrid = ({ gridSize = 2000, cellSize = 20 }) => {
         return updatedGrid;
       });
     });
-
+  
+    // Listen for fort detections
     socket.on("fort-detected", (fortData) => {
       console.log("Fort detected:", fortData);
-    
+  
       setGrid((prevGrid) => {
         const updatedGrid = { ...prevGrid };
-    
+  
         // Update border cells
         fortData.border_cells.forEach((coord) => {
           updatedGrid[coord] = {
@@ -104,7 +111,7 @@ const CellGrid = ({ gridSize = 2000, cellSize = 20 }) => {
             level: fortData.level,
           };
         });
-    
+  
         // Update inner cells
         fortData.inner_cells.forEach((coord) => {
           updatedGrid[coord] = {
@@ -114,7 +121,7 @@ const CellGrid = ({ gridSize = 2000, cellSize = 20 }) => {
             fort_id: fortData.fort_id,
           };
         });
-    
+  
         return updatedGrid;
       });
     });
@@ -127,12 +134,42 @@ const CellGrid = ({ gridSize = 2000, cellSize = 20 }) => {
         return newGrid;
       });
     });
+
+    socket.on("fort-level-updated", ({ fort_id, level }) => {
+      console.log(`Fort ${fort_id} level updated to ${level}`);
+      setGrid((prevGrid) => {
+        const updatedGrid = { ...prevGrid };
+  
+        // Update the level of all cells belonging to the fort
+        Object.keys(updatedGrid).forEach((key) => {
+          if (updatedGrid[key].fort_id === fort_id) {
+            updatedGrid[key] = {
+              ...updatedGrid[key],
+              fort_level: level,
+            };
+          }
+        });
+  
+        return updatedGrid;
+      });
+    });
+      // Listen for user level updates
+    socket.on("user-level-updated", ({ user_id, level }) => {
+      console.log(`User ${user_id} level updated to ${level}`);
+      if (user_id === userId) {
+        setUserLevel(level); // Update the state with the new level
+      }
+    });
+
   
     // Cleanup function
     return () => {
       socket.off("cell-updated");
       socket.off("fort-destroyed");
+      socket.off("fort-detected");
       socket.off("cell-deleted");
+      socket.off("fort-level-updated");
+      socket.off("user-level-updated");
     };
   }, []);
   
@@ -187,10 +224,9 @@ const CellGrid = ({ gridSize = 2000, cellSize = 20 }) => {
   }, []);
   
 
-  // Fetch energy details
   const fetchEnergy = async () => {
     try {
-      const response = await fetch("http://rbiz.pro/api/get-energy", {
+      const response = await fetch("http://rbiz.pro/api/calculate-energy", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -198,10 +234,14 @@ const CellGrid = ({ gridSize = 2000, cellSize = 20 }) => {
         },
         body: JSON.stringify({ userId }),
       });
-
+  
       if (response.ok) {
         const data = await response.json();
-        setEnergy(data.energy);
+        setEnergy((prevEnergy) => ({
+          ...prevEnergy,
+          charges: data.charges,
+          remaining_clicks_in_charge: data.remaining_clicks,
+        }));
       } else {
         console.error("Error fetching energy data");
       }
@@ -209,6 +249,7 @@ const CellGrid = ({ gridSize = 2000, cellSize = 20 }) => {
       console.error("Error fetching energy data:", error);
     }
   };
+  
 
   const handleOpenLogoutModal = () => {
     fetchEnergy();
@@ -226,7 +267,6 @@ const CellGrid = ({ gridSize = 2000, cellSize = 20 }) => {
       });
 
       if (response.ok) {
-        alert("Code sent to your Telegram account.");
         setLoginStep("verifyPassword");
       } else {
         const errorData = await response.json();
@@ -241,9 +281,10 @@ const CellGrid = ({ gridSize = 2000, cellSize = 20 }) => {
     }
   };
 
-  // Verify login code
   const verifyLoginCode = async () => {
     try {
+      console.log("Logging in with:", identifier, loginCode);
+  
       const response = await fetch("http://rbiz.pro/api/verify-login-code", {
         method: "POST",
         body: JSON.stringify({ identifier: identifier.trim(), code: loginCode.trim() }),
@@ -251,24 +292,31 @@ const CellGrid = ({ gridSize = 2000, cellSize = 20 }) => {
           "Content-Type": "application/json",
         },
       });
-
+  
       if (response.ok) {
-        const data = await response.json();
+        const data = await response.json(); // Parse JSON directly
+        console.log("Login Successful:", data);
+  
+        // Persist data
+        localStorage.setItem("userId", data.user_id);
+        localStorage.setItem("username", data.username);
         localStorage.setItem("token", data.token);
-        setUserId(data.userId);
+        setUserId(data.user_id);
         setUsername(data.username);
         setIsLoginModalOpen(false);
       } else {
-        const errorData = await response.json();
-        console.error("Error verifying login code:", errorData.error);
-        alert("Invalid code or identifier. Please try again.");
+        const errorData = await response.json(); // Parse JSON error response
+        console.error("Login Error Data:", errorData);
+        alert(errorData.error || "Invalid code or identifier. Please try again.");
       }
     } catch (error) {
-      console.error("Error verifying login code:", error);
+      console.error("Error during login:", error);
       alert("An error occurred. Please try again.");
     }
   };
-
+  
+  
+  
   const handleMouseEnter = (event, cell) => {
     if (cell.is_border && cell.fort_level !== undefined) {
       setHoveredFortLevel(cell.fort_level);
@@ -415,9 +463,13 @@ const CellGrid = ({ gridSize = 2000, cellSize = 20 }) => {
         <div className="modal-overlay">
           <div className="modal-content">
             <h2>Welcome, {username}</h2>
-            <p>Remaining Clicks in Current Charge: {energy.remaining_clicks_in_charge}</p>
-            <p>Charges Remaining: {energy.charges}</p>
-            <button onClick={logout} className="logout-button">
+            <p>Remaining Clicks: {energy.remaining_clicks_in_charge}</p>
+            <p>Charges: {4 - energy.charges}</p>
+            <p>User level: {userLevel ?? 0}</p>
+            <button
+              onClick={() => logout(() => setIsLogoutModalOpen(false))} // Pass a callback to close the modal
+              className="logout-button"
+            >
               Logout
             </button>
             <button onClick={() => setIsLogoutModalOpen(false)}>Cancel</button>

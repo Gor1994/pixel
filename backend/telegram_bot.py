@@ -25,8 +25,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     print(f"Handling /start command for user {telegram_user_id}...")
 
     initial_energy = {
-        "charges": 4,
-        "clicks_per_charge": 500,
+        "charges": 0,
+        "clicks_per_charge": 10,
         "last_click_timestamp": datetime.utcnow(),
         "last_recharge_timestamp": datetime.utcnow(),
     }

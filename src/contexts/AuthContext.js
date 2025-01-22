@@ -60,41 +60,9 @@ export const AuthProvider = ({ children }) => {
     };
 
     checkAuth();
-  }, []);
+  }, []);  
 
-  const login = async (identifier, loginCode) => {
-    try {
-      const response = await fetch("http://rbiz.pro/api/verify-login-code", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ identifier, loginCode }),
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        setUserId(data.userId);
-        setUsername(data.username);
-        setToken(data.token);
-        setColor(data.color); // Set color on login
-
-        // Persist in localStorage
-        localStorage.setItem("userId", data.userId);
-        localStorage.setItem("username", data.username);
-        localStorage.setItem("token", data.token);
-        localStorage.setItem("color", data.color); // Persist color
-        return true;
-      } else {
-        const errorData = await response.json();
-        console.error("Error logging in:", errorData.error);
-        return false;
-      }
-    } catch (error) {
-      console.error("Error during login:", error);
-      return false;
-    }
-  };
-
-  const logout = async () => {
+  const logout = async (callback) => {
     try {
       const response = await fetch("http://rbiz.pro/api/logout", {
         method: "POST",
@@ -102,18 +70,20 @@ export const AuthProvider = ({ children }) => {
           Authorization: `Bearer ${token}`, // Include token in headers for logout
         },
       });
-
+  
       if (response.ok) {
         setUserId(null);
         setUsername("");
         setToken(null);
         setColor(null); // Clear color
-
+  
         // Clear from localStorage
         localStorage.removeItem("userId");
         localStorage.removeItem("username");
         localStorage.removeItem("token");
         localStorage.removeItem("color");
+  
+        if (callback) callback(); // Execute the callback, e.g., close modal
       } else {
         console.error("Failed to log out.");
       }
@@ -121,10 +91,11 @@ export const AuthProvider = ({ children }) => {
       console.error("Error logging out:", error);
     }
   };
+  
 
   return (
     <AuthContext.Provider
-      value={{ userId, username, token, color, setUserId, setUsername, setToken, setColor, login, logout }}
+      value={{ userId, username, token, color, setUserId, setUsername, setToken, setColor, logout }}
     >
       {children}
     </AuthContext.Provider>
