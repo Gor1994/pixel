@@ -5,12 +5,12 @@ import "../styles/CellGrid.css";
 import "../styles/Login.css";
 import { io } from "socket.io-client";
 
-// const socket = io("ws://rbiz.pro");
-const socket = io("ws://rbiz.pro", {
-  transports: ["websocket"], // Force WebSocket transport
-  upgrade: true,
-});
 
+const socket = io("wss://rbiz.pro/", {
+  transports: ["websocket"],
+  pingInterval: 25000, // 25 seconds
+  pingTimeout: 60000,  // 60 seconds
+});
 
 
 const CellGrid = ({ gridSize = 2000, cellSize = 20 }) => {
@@ -33,7 +33,7 @@ const CellGrid = ({ gridSize = 2000, cellSize = 20 }) => {
   useEffect(() => {
     const fetchGrid = async () => {
       try {
-        const response = await fetch("http://rbiz.pro/api/get-grid");
+        const response = await fetch(`${window.location.protocol}//rbiz.pro/api/get-grid`);
         const data = await response.json();
 
         const gridData = {};
@@ -51,8 +51,32 @@ const CellGrid = ({ gridSize = 2000, cellSize = 20 }) => {
   }, []);
 
   useEffect(() => {
+    socket.on("connect", () => {
+      console.log("WebSocket connected successfully:", socket.id);
+    });
+    socket.on("test-event", (data) => {
+      console.log("Received test-event:", data);
+    });
+    
+    socket.on("connect_error", (error) => {
+      console.error("WebSocket connection error:", error);
+    });
+    
+    socket.on("disconnect", (reason) => {
+      console.warn("WebSocket disconnected:", reason);
+    });
+    
+    socket.on("reconnect_attempt", () => {
+      console.log("Attempting to reconnect...");
+    });
+    
+    socket.on("reconnect_failed", () => {
+      console.error("WebSocket failed to reconnect.");
+    });
     // Listen for cell updates
     socket.on("cell-updated", (updatedCell) => {
+      console.log("here");
+      
       if (!updatedCell || !updatedCell.coordinates) {
         console.error("Invalid cell data received:", updatedCell);
         return;
@@ -186,7 +210,7 @@ const CellGrid = ({ gridSize = 2000, cellSize = 20 }) => {
           return;
         }
         
-        const response = await fetch("http://rbiz.pro/api/check-login", {
+        const response = await fetch(`${window.location.protocol}//rbiz.pro/api/check-login`, {
           method: "GET",
           headers: {
             Authorization: `Bearer ${token}`,
@@ -226,7 +250,7 @@ const CellGrid = ({ gridSize = 2000, cellSize = 20 }) => {
 
   const fetchEnergy = async () => {
     try {
-      const response = await fetch("http://rbiz.pro/api/calculate-energy", {
+      const response = await fetch(`${window.location.protocol}//rbiz.pro/api/calculate-energy`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -260,7 +284,7 @@ const CellGrid = ({ gridSize = 2000, cellSize = 20 }) => {
   const requestLoginCode = async () => {
     setIsRequestingCode(true);
     try {
-      const response = await fetch("http://rbiz.pro/api/request-login-code", {
+      const response = await fetch(`${window.location.protocol}//rbiz.pro/api/request-login-code`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ identifier: identifier.trim() }),
@@ -285,7 +309,7 @@ const CellGrid = ({ gridSize = 2000, cellSize = 20 }) => {
     try {
       console.log("Logging in with:", identifier, loginCode);
   
-      const response = await fetch("http://rbiz.pro/api/verify-login-code", {
+      const response = await fetch(`${window.location.protocol}//rbiz.pro/api/verify-login-code`, {
         method: "POST",
         body: JSON.stringify({ identifier: identifier.trim(), code: loginCode.trim() }),
         headers: {
@@ -339,7 +363,7 @@ const CellGrid = ({ gridSize = 2000, cellSize = 20 }) => {
       }
 
       try {
-        const response = await fetch("http://rbiz.pro/api/claim-cell", {
+        const response = await fetch(`${window.location.protocol}//rbiz.pro/api/claim-cell`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -351,7 +375,7 @@ const CellGrid = ({ gridSize = 2000, cellSize = 20 }) => {
         console.log("Response text:", responseText);
 
         if (response.ok) {
-          const updatedGrid = await fetch("http://rbiz.pro/api/get-grid");
+          const updatedGrid = await fetch(`${window.location.protocol}//rbiz.pro/api/get-grid`);
           console.log("🚀 ~ updatedGrid:", updatedGrid)
           const data = await updatedGrid.json();
 

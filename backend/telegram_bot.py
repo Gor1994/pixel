@@ -26,7 +26,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     initial_energy = {
         "charges": 0,
-        "clicks_per_charge": 10,
+        "clicks_per_charge": 1000000,
         "last_click_timestamp": datetime.utcnow(),
         "last_recharge_timestamp": datetime.utcnow(),
     }

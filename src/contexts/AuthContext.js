@@ -22,7 +22,7 @@ export const AuthProvider = ({ children }) => {
       }
 
       try {
-        const response = await fetch("http://rbiz.pro/api/check-login", {
+        const response = await fetch(`${window.location.protocol}//rbiz.pro/api/check-login`, {
           method: "GET",
           headers: {
             Authorization: `Bearer ${storedToken}`, // Include token in headers
@@ -64,7 +64,7 @@ export const AuthProvider = ({ children }) => {
 
   const logout = async (callback) => {
     try {
-      const response = await fetch("http://rbiz.pro/api/logout", {
+      const response = await fetch(`${window.location.protocol}//rbiz.pro/api/logout`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${token}`, // Include token in headers for logout

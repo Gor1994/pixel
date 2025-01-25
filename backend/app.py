@@ -22,7 +22,9 @@ app = Flask(__name__)
 # CORS(app, supports_credentials=True, resources={r"/*": {"origins": "http://195.133.146.186/"}})
 #CORS(app)
 
-socketio = SocketIO(app, async_mode="gevent", cors_allowed_origins="*")
+# socketio = SocketIO(app, async_mode="gevent", cors_allowed_origins="*")
+socketio = SocketIO(app, cors_allowed_origins="*", ping_interval=25, ping_timeout=60)
+
 
 #socketio = SocketIO(app, cors_allowed_origins="*", logger=True, engineio_logger=True)
 #socketio = SocketIO(app, cors_allowed_origins="*")
@@ -102,6 +104,11 @@ async def send_login_code_to_telegram(telegram_user_id, code):
 # Determine if the identifier is Telegram ID (numeric) or username (alphanumeric)
 def is_telegram_id(identifier):
     return identifier.isdigit()  # Check if the identifier consists of only digits
+
+@socketio.on('connect')
+def on_connect():
+    print(f"Client connected: {request.sid}")
+    emit("connected", {"message": "Welcome!"})
 
 
 @app.route("/request-login-code", methods=["POST"])
@@ -535,7 +542,6 @@ def destroy_fort(fort_id):
     return True
 
 
-
 @app.route("/claim-cell", methods=["POST"])
 def claim_cell_with_energy():
     """Handle cell clicks with energy validation."""
@@ -561,64 +567,59 @@ def claim_cell_with_energy():
 
     # Retrieve current energy details
     clicks_in_charge = energy.get("clicks_in_charge", 0)
-    clicks_per_charge = energy.get("clicks_per_charge", 10)
+    clicks_per_charge = energy.get("clicks_per_charge", 1000000)
     last_recharge_timestamp = energy.get("last_recharge_timestamp", None)
     charges = energy.get("charges", 0)
-    max_charges = 3
-    recharge_duration = 100  # Recharge time in seconds (10 minutes)
-    clicks_per_charge_max = 10
+    max_charges = 4  # Updated maximum charges
+    recharge_duration = 600  # Recharge time in seconds (10 minutes)
+    clicks_per_charge_max = 1000000
 
     now = datetime.utcnow()
 
-    # Condition 1: If clicks_in_charge >= clicks_per_charge (user exhausted current charge)
-    if clicks_in_charge >= clicks_per_charge:
-        # Case A: First charge
-        if charges == 0:
-            charges += 1
-            clicks_in_charge = 0
-            clicks_per_charge = 0
-            last_recharge_timestamp = now
-            users_collection.update_one(
-                {"telegram_user_id": int(user_id)},
-                {
-                    "$set": {
-                        "energy.charges": charges,
-                        "energy.clicks_in_charge": clicks_in_charge,
-                        "energy.clicks_per_charge": clicks_per_charge,
-                        "energy.last_recharge_timestamp": last_recharge_timestamp,
-                    }
-                }
-            )
-            return jsonify({"error": "Max clicks reached. Please wait for energy recharge."}), 400
+    # Check if charges have reached the maximum and 24 hours have passed
+    if charges >= max_charges:
+        if last_recharge_timestamp:
+            elapsed_hours = (now - last_recharge_timestamp).total_seconds() / 3600
+            if elapsed_hours >= 24:
+                # Reset energy state for the user
+                charges = 0
+                clicks_in_charge = 0
+                clicks_per_charge = 1000000  # Default clicks per charge after reset
+                last_recharge_timestamp = None
 
-        # Case B: Recharge is ongoing
-        elapsed_seconds = (now - last_recharge_timestamp).total_seconds()
-        if elapsed_seconds < recharge_duration:
-            recharge_rate = clicks_per_charge_max / recharge_duration
-            recharged_clicks = min(int(elapsed_seconds * recharge_rate), clicks_per_charge_max)
-            clicks_per_charge = recharged_clicks
-            if clicks_in_charge < clicks_per_charge:
-                # Update the recharged clicks and proceed
                 users_collection.update_one(
                     {"telegram_user_id": int(user_id)},
                     {
                         "$set": {
+                            "energy.charges": charges,
+                            "energy.clicks_in_charge": clicks_in_charge,
                             "energy.clicks_per_charge": clicks_per_charge,
-                        }
+                        },
+                        "$unset": {"energy.last_recharge_timestamp": ""}
                     }
                 )
+                print("✅ 24 hours elapsed. Energy reset for the user.")
             else:
-                # Recharge still ongoing and clicks are exhausted
-                print("❌ Recharge ongoing. Please wait.")
-                return jsonify({"error": "Recharging... Please wait before claiming more cells."}), 400
+                print("❌ Max charges reached. Wait for 24 hours to reset.")
+                return jsonify({"error": "Max charges reached. Wait for 24 hours to reset."}), 400
+        else:
+            print("❌ Max charges reached and last recharge timestamp missing.")
+            return jsonify({"error": "Max charges reached. Wait for 24 hours to reset."}), 400
 
-        # Case C: Recharge period is over, time to increase charge
+    # Condition 1: If clicks_in_charge >= clicks_per_charge (user exhausted current charge)
+    if clicks_in_charge >= clicks_per_charge:
+        elapsed_seconds = (now - last_recharge_timestamp).total_seconds() if last_recharge_timestamp else 0
+        if elapsed_seconds < recharge_duration:
+            print("❌ Recharge ongoing. Please wait.")
+            return jsonify({"error": "Recharging... Please wait before claiming more cells."}), 400
+
         if elapsed_seconds >= recharge_duration:
             if charges < max_charges:
                 charges += 1
                 clicks_in_charge = 0
                 clicks_per_charge = 0
                 last_recharge_timestamp = now
+
                 users_collection.update_one(
                     {"telegram_user_id": int(user_id)},
                     {
@@ -630,32 +631,18 @@ def claim_cell_with_energy():
                         }
                     }
                 )
+                print("Charge increased. Please wait for recharge to complete.")
                 return jsonify({"error": "Max clicks reached. Please wait for energy recharge."}), 400
-            else:
-                users_collection.update_one(
-                    {"telegram_user_id": int(user_id)},
-                    {
-                        "$set": {
-                            "energy.charges": 4,
-                        }
-                    }
-                )
-                # Max charges are reached
-                print("❌ Max charges reached. No more clicks allowed.")
-                return jsonify({"error": "Max charges reached. No more clicks allowed."}), 400
 
     # Increment clicks_in_charge for valid cases
     clicks_in_charge += 1
-
-    # Check if clicks_in_charge has reached the maximum allowed clicks
     if clicks_in_charge >= clicks_per_charge_max:
-        if charges < max_charges:  # Ensure charges do not exceed max allowed
+        if charges < max_charges:
             charges += 1
             clicks_in_charge = 0
             clicks_per_charge = 0
             last_recharge_timestamp = now
 
-            # Update the user's energy in the database
             users_collection.update_one(
                 {"telegram_user_id": int(user_id)},
                 {
@@ -688,15 +675,12 @@ def claim_cell_with_energy():
         max_level = 2  # Default max level for cells not in a fort
         if cell.get("is_in_fort"):
             fort_id = cell.get("fort_id")
-            # Count border cells of the fort
             border_cell_count = cells_collection.count_documents({"fort_id": fort_id, "is_border": True})
             max_level = border_cell_count * 2
 
         if cell["user_id"] != user_id:
-            # Decrease the cell level if owned by another user
-            new_level = max(cell.get("level", 0) - 1, 0)  # Ensure level doesn't go below 0
+            new_level = max(cell.get("level", 0) - 1, 0)
             if new_level <= 0:
-                # If level reaches 0, remove the cell from the database
                 cells_collection.delete_one({"coordinates": cell_coordinates})
                 socketio.emit("cell-deleted", {"coordinates": cell_coordinates})
                 if cell.get("is_in_fort"):
@@ -707,9 +691,15 @@ def claim_cell_with_energy():
                     {"$set": {"level": new_level}}
                 )
                 updated_cell = cells_collection.find_one({"coordinates": cell_coordinates}, {"_id": 0})
-                socketio.emit("cell-updated", updated_cell)
+                try:
+                    socketio.emit("cell-updated", updated_cell)
+                    socketio.emit("test-event", {"message": "Test message from server"})
+
+                    print(f"emiting event")
+                except Exception as e:
+                    print(f"faild", e)
+                    app.logger.error(f"Error emitting cell-updated: {e}")
         else:
-            # Increment cell level for the same user
             current_level = cell.get("level", 0)
             new_level = min(current_level + 1, max_level)
             cells_collection.update_one(
@@ -717,7 +707,16 @@ def claim_cell_with_energy():
                 {"$set": {"level": new_level, "color": user.get("color")}}
             )
             updated_cell = cells_collection.find_one({"coordinates": cell_coordinates}, {"_id": 0})
-            socketio.emit("cell-updated", updated_cell)
+            
+            try:
+                socketio.emit("cell-updated", updated_cell)
+                socketio.emit("test-event", {"message": "Test message from server"})
+
+                print(f"emiting event")
+            except Exception as e:
+                print(f"faild", e)
+                app.logger.error(f"Error emitting cell-updated: {e}")
+
             if cell.get("is_in_fort"):
                 updated_fort_level = calculate_fort_level(cell.get("fort_id"))
                 forts_collection.update_one(
@@ -734,16 +733,15 @@ def claim_cell_with_energy():
             "color": user.get("color"),
         })
         updated_cell = cells_collection.find_one({"coordinates": cell_coordinates}, {"_id": 0})
-        socketio.emit("cell-updated", updated_cell)
 
-    # Update the user's level
-    new_user_level = calculate_user_level(user_id)
-    users_collection.update_one(
-        {"telegram_user_id": int(user_id)},
-        {"$set": {"level": new_user_level}}
-    )
-    socketio.emit("user-level-updated", {"user_id": user_id, "level": new_user_level})
-    print(f"User {user_id} level updated to {new_user_level}")
+        try:
+            socketio.emit("cell-updated", updated_cell)
+            socketio.emit("test-event", {"message": "Test message from server"})
+
+            print(f"emiting event")
+        except Exception as e:
+            print(f"faild", e)
+            app.logger.error(f"Error emitting cell-updated: {e}")
 
     detect_and_mark_fort((row, col))
 
@@ -772,41 +770,65 @@ def calculate_energy_endpoint():
 
     energy = user.get("energy", {})
     now = datetime.utcnow()
-    clicks_per_charge = energy.get("clicks_per_charge", 10)
-    clicks_per_charge_max = 10  # Maximum clicks per charge
+    clicks_per_charge = energy.get("clicks_per_charge", 1000000)
+    clicks_per_charge_max = 1000000  # Maximum clicks per charge
     clicks_in_charge = energy.get("clicks_in_charge", 0)
     charges = energy.get("charges", 0)
     last_recharge_timestamp = energy.get("last_recharge_timestamp", None)
 
+    # Check if charges are 4 and 24 hours have passed
+    if charges >= 4:
+        if last_recharge_timestamp:
+            elapsed_hours = (now - last_recharge_timestamp).total_seconds() / 3600
+            if elapsed_hours >= 24:
+                # Reset energy state for the user
+                charges = 0
+                clicks_in_charge = 0
+                clicks_per_charge = 1000000  # Default clicks per charge after reset
+                last_recharge_timestamp = None
+
+                users_collection.update_one(
+                    {"telegram_user_id": int(user_id)},
+                    {
+                        "$set": {
+                            "energy.charges": charges,
+                            "energy.clicks_in_charge": clicks_in_charge,
+                            "energy.clicks_per_charge": clicks_per_charge,
+                        },
+                        "$unset": {"energy.last_recharge_timestamp": ""}
+                    }
+                )
+                print("✅ 24 hours elapsed. Energy reset for the user.")
+
+    # Calculate remaining clicks if charges are not maxed out
     if charges == 0:
-        # If no charges, return remaining clicks
+        # If no charges, calculate remaining clicks
         remaining_clicks = clicks_per_charge - clicks_in_charge
-        return jsonify({
-            "remaining_clicks": remaining_clicks,
-            "charges": charges
-        }), 200
+    else:
+        # Handle clicks per charge recharge logic
+        remaining_clicks = clicks_per_charge - clicks_in_charge
+        if clicks_per_charge < clicks_per_charge_max:
+            elapsed_seconds = (now - last_recharge_timestamp).total_seconds() if last_recharge_timestamp else 0
 
-    if clicks_per_charge < clicks_per_charge_max:
-        elapsed_seconds = (now - last_recharge_timestamp).total_seconds()
+            if elapsed_seconds >= 600:  # If 10 minutes have passed
+                clicks_per_charge = clicks_per_charge_max
+                users_collection.update_one(
+                    {"telegram_user_id": int(user_id)},
+                    {"$set": {"energy.clicks_per_charge": clicks_per_charge}}
+                )
+            else:
+                # Calculate recharged clicks
+                recharge_rate = clicks_per_charge_max / 600  # 10 clicks in 10 minutes
+                recharged_clicks = int(elapsed_seconds * recharge_rate)
+                clicks_per_charge = min(clicks_per_charge_max, recharged_clicks)
 
-        if elapsed_seconds >= 100:  # If 10 minutes have passed
-            clicks_per_charge = clicks_per_charge_max
-            users_collection.update_one(
-                {"telegram_user_id": int(user_id)},
-                {"$set": {"energy.clicks_per_charge": clicks_per_charge}}
-            )
-        else:
-            # Calculate recharged clicks
-            recharge_rate = clicks_per_charge_max / 100  # 10 clicks in 10 minutes
-            recharged_clicks = int(elapsed_seconds * recharge_rate)
-            clicks_per_charge = min(clicks_per_charge_max, recharged_clicks)
+                # Update the recharged clicks in the database
+                users_collection.update_one(
+                    {"telegram_user_id": int(user_id)},
+                    {"$set": {"energy.clicks_per_charge": clicks_per_charge}}
+                )
 
-            # Update the recharged clicks in the database
-            users_collection.update_one(
-                {"telegram_user_id": int(user_id)},
-                {"$set": {"energy.clicks_per_charge": clicks_per_charge}}
-            )
-
+    # Calculate remaining clicks again in case of any updates
     remaining_clicks = clicks_per_charge - clicks_in_charge
 
     return jsonify({
@@ -851,7 +873,7 @@ def recharge_energy():
 
     energy = user.get("energy", {})
     now = datetime.utcnow()
-    clicks_per_charge = energy.get("clicks_per_charge", 10)
+    clicks_per_charge = energy.get("clicks_per_charge", 1000000)
     clicks_in_charge = energy.get("clicks_in_charge", 0)
     charges = energy.get("charges", 0)
     last_recharge_timestamp = energy.get("last_recharge_timestamp")
@@ -860,8 +882,8 @@ def recharge_energy():
     available_clicks = clicks_per_charge - clicks_in_charge
     if charges > 0 and last_recharge_timestamp:
         elapsed_seconds = (now - last_recharge_timestamp).total_seconds()
-        if elapsed_seconds < 100:  # Only calculate if within recharge duration
-            recharge_rate = clicks_per_charge / 100  # 500 clicks in 10 minutes
+        if elapsed_seconds < 600:  # Only calculate if within recharge duration
+            recharge_rate = clicks_per_charge / 600  # 500 clicks in 10 minutes
             recharged_clicks = int(elapsed_seconds * recharge_rate)
             available_clicks = min(clicks_per_charge, clicks_in_charge + recharged_clicks) - clicks_in_charge
 
