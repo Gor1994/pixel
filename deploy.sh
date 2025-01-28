@@ -16,7 +16,7 @@ REMOTE_APP_DIR="/var/www/rbiz.pro/backend"
 
 # Local build directory
 BUILD_DIR="./build"
-APP_FILES=("./backend/app.py" "./backend/telegram_bot.py") # Files to be deployed to the backend
+APP_FILES=("./backend/app.py" "./backend/telegram_bot.py" "./backend/.env") # Files to be deployed to the backend
 
 # Ensure dependencies are installed and build the project
 echo "Building the frontend..."

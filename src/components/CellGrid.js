@@ -158,6 +158,22 @@ const CellGrid = ({ gridSize = 2000, cellSize = 20 }) => {
         return newGrid;
       });
     });
+      // Listen for the "user-recharged" socket event
+    socket.on("user-recharged", (data) => {
+      console.log("User recharged:", data);
+      console.log("🚀 ~ socket.on ~ data.user_id:", data.user_id)
+      console.log("🚀 ~ socket.on ~ data.clicks_per_charge:", data.clicks_per_charge)
+      console.log("🚀 ~ socket.on ~ userId:", userId)
+      if (data.user_id === userId) { // Replace with the current user's ID
+        console.log("here111111");
+        
+        setEnergy({
+          clicks_per_charge: data.clicks_per_charge,
+          recharged: data.recharged,
+          charges: data.charges
+        });
+      }
+    })
 
     socket.on("fort-level-updated", ({ fort_id, level }) => {
       console.log(`Fort ${fort_id} level updated to ${level}`);
@@ -179,9 +195,13 @@ const CellGrid = ({ gridSize = 2000, cellSize = 20 }) => {
     });
       // Listen for user level updates
     socket.on("user-level-updated", ({ user_id, level }) => {
-      console.log(`User ${user_id} level updated to ${level}`);
+      console.log(`User ${user_id} level updated to ${level}`);      
       if (user_id === userId) {
-        setUserLevel(level); // Update the state with the new level
+
+        localStorage.setItem("userLevel", userLevel);
+        const savedLevel = localStorage.getItem("userLevel");
+        if (savedLevel) setUserLevel(parseInt(savedLevel));
+          // setUserLevel(level); // Update the state with the new level
       }
     });
 
@@ -194,6 +214,7 @@ const CellGrid = ({ gridSize = 2000, cellSize = 20 }) => {
       socket.off("cell-deleted");
       socket.off("fort-level-updated");
       socket.off("user-level-updated");
+      socket.off("user-recharged");
     };
   }, []);
   
@@ -261,11 +282,12 @@ const CellGrid = ({ gridSize = 2000, cellSize = 20 }) => {
   
       if (response.ok) {
         const data = await response.json();
-        setEnergy((prevEnergy) => ({
-          ...prevEnergy,
-          charges: data.charges,
-          remaining_clicks_in_charge: data.remaining_clicks,
-        }));
+        setEnergy({
+          clicks_per_charge: data.clicks_per_charge,
+          recharged: data.recharged,
+          charges: data.charges
+        });
+        setUserLevel(data.level)
       } else {
         console.error("Error fetching energy data");
       }
@@ -487,8 +509,8 @@ const CellGrid = ({ gridSize = 2000, cellSize = 20 }) => {
         <div className="modal-overlay">
           <div className="modal-content">
             <h2>Welcome, {username}</h2>
-            <p>Remaining Clicks: {energy.remaining_clicks_in_charge}</p>
-            <p>Charges: {4 - energy.charges}</p>
+            <p>Remaining Clicks: {energy.clicks_per_charge}</p>
+            <p>Charges: {energy.charges}</p>
             <p>User level: {userLevel ?? 0}</p>
             <button
               onClick={() => logout(() => setIsLogoutModalOpen(false))} // Pass a callback to close the modal

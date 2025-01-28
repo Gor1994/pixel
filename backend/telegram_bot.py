@@ -2,8 +2,10 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from pymongo import MongoClient
 from datetime import datetime
+from dotenv import load_dotenv
 import random
 import asyncio
+import os
 
 # Telegram Bot Token
 TELEGRAM_APP_TOKEN = "8076325725:AAHqtb8Z7mJu56NEceWYtLTvD1h-2rI3_Wg"
@@ -13,6 +15,10 @@ MONGO_URI = 'mongodb+srv://nershakobyan:QkmcuOAhHba7C4q8@cluster0.1rwwk.mongodb.
 client = MongoClient(MONGO_URI)
 db = client["Grid_Game"]
 users_collection = db["users"]
+# Load .env file
+load_dotenv()
+
+MAX_CLICK_PER_CHARGE = int(os.getenv("MAX_CLICK_PER_CHARGE"))
 
 # Generate random color
 def generate_random_color_hex():
@@ -26,7 +32,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     initial_energy = {
         "charges": 0,
-        "clicks_per_charge": 1000000,
+        "clicks_per_charge": MAX_CLICK_PER_CHARGE,
         "last_click_timestamp": datetime.utcnow(),
         "last_recharge_timestamp": datetime.utcnow(),
     }

@@ -1,11 +1,12 @@
 from flask import Flask, request, jsonify, session
+from flask_socketio import SocketIO, emit, join_room, leave_room
 from uuid import uuid4
 from flask_cors import CORS
-from pymongo import MongoClient, UpdateOne
+from pymongo import MongoClient, UpdateOne, DeleteOne
 from datetime import datetime, timedelta
 import certifi
 from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, ContextTypes, Defaults
 from threading import Thread
 import random
 import secrets
@@ -13,13 +14,30 @@ import logging
 import requests
 import asyncio
 from flask_session import Session
-
+import json
+from bson import ObjectId
+from multiprocessing import Process
 
 app = Flask(__name__)
-CORS(app, supports_credentials=True, resources={r"/*": {"origins": "http://localhost:3000"}})
+# CORS(app, supports_credentials=True, resources={r"/*": {"origins": "http://195.133.146.186/"}})
+#CORS(app)
 
+# socketio = SocketIO(app, async_mode="gevent", cors_allowed_origins="*")
+socketio = SocketIO(app, cors_allowed_origins="*", ping_interval=25, ping_timeout=60)
+
+
+#socketio = SocketIO(app, cors_allowed_origins="*", logger=True, engineio_logger=True)
+#socketio = SocketIO(app, cors_allowed_origins="*")
+CORS(app, supports_credentials=True)
 app.secret_key = "aaa"
 import os
+class CustomJSONEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, ObjectId):
+            return str(obj)
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        return super().default(obj)
 
 SESSION_FILE_DIR = './flask_session'
 if not os.path.exists(SESSION_FILE_DIR):
@@ -56,8 +74,9 @@ FORT_MIN_SIZE = 3
 
 ########################################  TELEGRAM ########################################
 # Telegram Bot Token
-TELEGRAM_BOT_TOKEN = '8076325725:AAHqtb8Z7mJu56NEceWYtLTvD1h-2rI3_Wg'
-telegram_bot = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+telegram_app_TOKEN = '8076325725:AAHqtb8Z7mJu56NEceWYtLTvD1h-2rI3_Wg'
+# Correctly initialize the Telegram Bot Application
+telegram_app = Application.builder().token(telegram_app_TOKEN).build()
 
 # Constants
 CODE_VALIDITY_MINUTES = 5  # Code expiration time
@@ -67,12 +86,15 @@ CODE_VALIDITY_MINUTES = 5  # Code expiration time
 def generate_login_code():
     return f"{random.randint(100000, 999999)}"
 
+def generate_random_color_hex():
+    """Generate a random hex color code."""
+    return f"#{random.randint(0, 0xFFFFFF):06x}"
 
 # Send login code to Telegram
 async def send_login_code_to_telegram(telegram_user_id, code):
     try:
         message = f"Your login code is: {code}\nIt is valid for {CODE_VALIDITY_MINUTES} minutes."
-        await telegram_bot.bot.send_message(chat_id=telegram_user_id, text=message)   
+        await telegram_app.bot.send_message(chat_id=telegram_user_id, text=message)   
 
         print(f"✅ Login code sent to Telegram ID {telegram_user_id}")
     except Exception as e:
@@ -82,6 +104,11 @@ async def send_login_code_to_telegram(telegram_user_id, code):
 # Determine if the identifier is Telegram ID (numeric) or username (alphanumeric)
 def is_telegram_id(identifier):
     return identifier.isdigit()  # Check if the identifier consists of only digits
+
+@socketio.on('connect')
+def on_connect():
+    print(f"Client connected: {request.sid}")
+    emit("connected", {"message": "Welcome!"})
 
 
 @app.route("/request-login-code", methods=["POST"])
@@ -129,7 +156,7 @@ def request_login_code():
         except Exception as ip_error:
             print(f"Error fetching location: {ip_error}")
 
-        telegram_url = f'https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage'
+        telegram_url = f'https://api.telegram.org/bot{telegram_app_TOKEN}/sendMessage'
 
         # Construct the message to send via Telegram
         message_text = (
@@ -243,62 +270,6 @@ def logout():
         del server_sessions[token]
     return jsonify({"message": "Logged out successfully"}), 200
 
-# Telegram Bot Handlers
-async def start(update: ContextTypes.DEFAULT_TYPE, context):
-    """Handle the /start command to store Telegram user details."""
-    telegram_user_id = update.effective_user.id
-    telegram_username = update.effective_user.username or "Unknown"
-
-    # Check if the user already exists in the database
-    existing_user = users_collection.find_one({"telegram_user_id": telegram_user_id})
-
-    if existing_user:
-        await update.message.reply_text(f"Welcome back, {telegram_username}!")
-    else:
-        user_data = {
-            "telegram_user_id": telegram_user_id,
-            "telegram_username": telegram_username,
-            "registered_at": datetime.utcnow().isoformat(),
-        }
-        users_collection.insert_one(user_data)
-        await update.message.reply_text(f"Welcome, {telegram_username}! You have been registered.")
-
-    print(f"User {telegram_username} with ID {telegram_user_id} started the bot.")
-
-
-# Start the Telegram bot
-def start_telegram_bot():
-    """Start the Telegram bot."""
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(telegram_bot.run_polling())
-
-
-async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle unknown commands."""
-    await update.message.reply_text("Sorry, I didn't understand that command.")
-
-def telegram_bot():
-    """Start the Telegram bot."""
-    # Initialize the bot application
-    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-
-    # Add handlers
-    application.add_handler(CommandHandler("start", start))
-
-    print("Starting Telegram bot...")
-
-    # Manually create and set an event loop for this thread
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-
-    # Run the bot in the thread's event loop without signal handlers
-    loop.run_until_complete(application.run_polling(allowed_updates=None, stop_signals=None))
-
-
-
-####################################################################################################
-
 
 def get_neighbors(row, col):
     """Get neighbors for a given cell."""
@@ -317,10 +288,11 @@ def fetch_grid_as_dict():
         grid[(row, col)] = cell
     return grid
 
-from uuid import uuid4
-
-def detect_and_mark_fort(start_cell):
-    """Detect and mark forts (rectangles) with a minimum size, while handling overlapping or enclosed forts."""
+def detect_and_mark_fort(start_cell, user_id):
+    """
+    Detect and mark forts (rectangles) with a minimum size, while ensuring all cells in the fort
+    belong to the specified user and are not part of another fort.
+    """
     grid = fetch_grid_as_dict()  # Fetch the current grid state from MongoDB
     visited = set()  # Track visited cells
 
@@ -341,132 +313,165 @@ def detect_and_mark_fort(start_cell):
 
         return component
 
+    def find_largest_rectangle(cells, grid, user_id):
+        """
+        Find the largest valid rectangle within a set of connected cells,
+        ensuring all cells belong to the same owner and are not part of another fort.
+        """
+        if not cells:
+            return None
+
+        # Convert cells to a sorted list of coordinates
+        cells_list = sorted(list(cells))
+        min_row = min(r for r, _ in cells_list)
+        max_row = max(r for r, _ in cells_list)
+        min_col = min(c for _, c in cells_list)
+        max_col = max(c for _, c in cells_list)
+
+        best_rectangle = None
+        max_area = 0
+
+        for top in range(min_row, max_row + 1):
+            for bottom in range(top + FORT_MIN_SIZE - 1, max_row + 1):
+                for left in range(min_col, max_col + 1):
+                    for right in range(left + FORT_MIN_SIZE - 1, max_col + 1):
+                        # Check if this rectangle is valid
+                        is_valid = True
+                        border_cells = set()
+                        inner_cells = set()
+                        empty_cells = set()  # Track empty cells
+
+                        # Check all cells in the potential rectangle
+                        for r in range(top, bottom + 1):
+                            for c in range(left, right + 1):
+                                cell_data = grid.get((r, c), {})
+                                if not cell_data:  # Cell does not exist in the grid
+                                    is_valid = False
+                                    break
+
+                                # Check user ownership
+                                if cell_data.get("user_id") != user_id:
+                                    is_valid = False
+                                    break
+
+                                if r == top or r == bottom or c == left or c == right:
+                                    # Border cell checks
+                                    if (r, c) not in cells or cell_data.get("is_in_fort"):
+                                        is_valid = False
+                                        break
+                                    border_cells.add((r, c))
+                                else:
+                                    # Inner cell checks
+                                    inner_cells.add((r, c))
+                                    if "user_id" not in cell_data or cell_data.get("user_id") is None:
+                                        empty_cells.add((r, c))
+
+                            if not is_valid:
+                                break
+
+                        # Check minimum size, at least one inner cell, and at least one empty cell
+                        if (not is_valid or
+                                bottom - top + 1 < FORT_MIN_SIZE or
+                                right - left + 1 < FORT_MIN_SIZE or
+                                not inner_cells or
+                                not empty_cells):  # Ensure at least one empty cell
+                            continue
+
+                        # Calculate area
+                        area = (bottom - top + 1) * (right - left + 1)
+                        if area > max_area:
+                            max_area = area
+                            best_rectangle = {
+                                'top': top,
+                                'bottom': bottom,
+                                'left': left,
+                                'right': right,
+                                'border_cells': border_cells,
+                                'inner_cells': inner_cells
+                            }
+
+        return best_rectangle
+
     # Start detection from the specified cell
     start_row, start_col = start_cell
     connected_cells = dfs(start_row, start_col)
 
-    # Group cells by rows
-    rows = {}
-    for r, c in connected_cells:
-        if r not in rows:
-            rows[r] = []
-        rows[r].append(c)
+    # Find the largest valid rectangle within connected cells
+    rectangle = find_largest_rectangle(connected_cells, grid, user_id)
+    print(f"🚀 ~ rectangle:", rectangle)
+    
+    if not rectangle:
+        return False
 
-    # Sort rows and their columns
-    for r in rows:
-        rows[r] = sorted(rows[r])
+    # Convert coordinate tuples to string format for database
+    border_cells = [f"{r}-{c}" for r, c in rectangle['border_cells']]
+    print(f"🚀 ~ border_cells:", border_cells)
+    inner_cells = [f"{r}-{c}" for r, c in rectangle['inner_cells']]
+    print(f"🚀 ~ inner_cells:", inner_cells)
 
-    # Check for rectangles
-    row_indices = sorted(rows.keys())
-    for start_row_idx in range(len(row_indices)):
-        for end_row_idx in range(start_row_idx + FORT_MIN_SIZE - 1, len(row_indices)):
-            start_row = row_indices[start_row_idx]
-            end_row = row_indices[end_row_idx]
+    # Validate ownership of border cells
+    for coord in border_cells:
+        cell_data = grid.get((int(coord.split('-')[0]), int(coord.split('-')[1])), {})
+        if cell_data.get("is_in_fort"):
+            print(f"❌ Border cell {coord} is already part of another fort.")
+            return False
 
-            # Check if all required rows exist
-            if not all(row in rows for row in range(start_row, end_row + 1)):
-                continue
+    # Validate inner cells
+    for cell in inner_cells:
+        inner_cell_data = grid.get((int(cell.split('-')[0]), int(cell.split('-')[1])), {})
+        if inner_cell_data.get("is_in_fort", False):  # If any inner cell is already in a fort, abort
+            print("❌ Cannot create fort: One or more inner cells are part of an existing fort.")
+            return False
 
-            # Determine the column range for the rectangle
-            start_col = min(min(rows[row]) for row in range(start_row, end_row + 1))
-            end_col = max(max(rows[row]) for row in range(start_row, end_row + 1))
+    # Generate a unique fort_id
+    new_fort_id = str(uuid4())
 
-            # Ensure the rectangle meets the minimum size requirements
-            if (end_row - start_row + 1) < FORT_MIN_SIZE or (end_col - start_col + 1) < FORT_MIN_SIZE:
-                continue
+    # Calculate fort level based on the minimum level of border cells
+    fort_level = min(
+        [grid.get((int(coord.split('-')[0]), int(coord.split('-')[1])), {}).get("level", 1) for coord in border_cells]
+    )
 
-            # Identify border and inner cells
-            border_cells = []
-            inner_cells = []
+    # Generate the fort data
+    fort_data = {
+        "fort_id": new_fort_id,
+        "user_id": user_id,  # The single owner ID
+        "border_cells": border_cells,
+        "inner_cells": inner_cells,
+        "level": fort_level,
+        "created_at": datetime.utcnow()
+    }
 
-            for r in range(start_row, end_row + 1):
-                for c in range(start_col, end_col + 1):
-                    if r == start_row or r == end_row or c == start_col or c == end_col:
-                        border_cells.append(f"{r}-{c}")
-                    else:
-                        inner_cells.append(f"{r}-{c}")
+    # Proceed to store the fort in the `forts` collection
+    forts_collection.insert_one(fort_data)
 
-            # Generate a unique `fort_id` for this fort
-            new_fort_id = str(uuid4())
+    # Prepare bulk operations for `owned_cells` update
+    bulk_operations = []
+    for cell in border_cells:
+        bulk_operations.append(
+            UpdateOne(
+                {"coordinates": cell},
+                {"$set": {"is_border": True, "is_inner": False, "is_in_fort": True, "fort_id": new_fort_id}},
+                upsert=True
+            )
+        )
+    for cell in inner_cells:
+        bulk_operations.append(
+            UpdateOne(
+                {"coordinates": cell},
+                {"$set": {"is_border": False, "is_inner": True, "is_in_fort": True, "fort_id": new_fort_id}},
+                upsert=True
+            )
+        )
+    if bulk_operations:
+        cells_collection.bulk_write(bulk_operations)
 
-            # Validate the borders of the rectangle
-            is_valid_rectangle = True
+    print(f"✅ Fort added to database: {fort_data}")
 
-            # Check top and bottom rows (must be fully filled across start_col to end_col)
-            if not all((start_row, col) in connected_cells for col in range(start_col, end_col + 1)):
-                is_valid_rectangle = False
-            if not all((end_row, col) in connected_cells for col in range(start_col, end_col + 1)):
-                is_valid_rectangle = False
-
-            # Check left and right columns (must be fully filled from start_row to end_row)
-            if not all((row, start_col) in connected_cells for row in range(start_row, end_row + 1)):
-                is_valid_rectangle = False
-            if not all((row, end_col) in connected_cells for row in range(start_row, end_row + 1)):
-                is_valid_rectangle = False
-
-            if is_valid_rectangle:
-                print(f"🏰 Detected valid rectangle from ({start_row}, {start_col}) to ({end_row}, {end_col})")
-
-                # Calculate fort level based on the minimum level of border cells
-                fort_level = min(
-                    [grid.get((int(coord.split('-')[0]), int(coord.split('-')[1])), {}).get("level", 1) for coord in border_cells]
-                )
-                # Generate the fort data
-                fort_data = {
-                    "fort_id": new_fort_id,
-                    "user_id": grid.get((start_row, start_col), {}).get("user_id"),
-                    "border_cells": border_cells,
-                    "inner_cells": inner_cells,
-                    "level": fort_level,
-                    "created_at": datetime.utcnow(),
-                }
-
-                # Check for existing inner forts
-                overlapping_forts = list(forts_collection.find({"border_cells": {"$in": inner_cells}}))
-                if overlapping_forts:
-                    print(f"❌ Cannot create larger fort from ({start_row}, {start_col}) to ({end_row}, {end_col}) because it encloses another fort.")
-
-                    # Retrieve all existing cells for this larger fort
-                    existing_cells = list(cells_collection.find({"coordinates": {"$in": border_cells + inner_cells}}))
-                    existing_fort_ids = {cell["coordinates"] for cell in existing_cells if "fort_id" in cell}
-
-                    # Remove only the cells without a valid fort_id in bulk
-                    cells_to_remove = [cell for cell in (border_cells + inner_cells) if cell not in existing_fort_ids]
-                    if cells_to_remove:
-                        cells_collection.delete_many({"coordinates": {"$in": cells_to_remove}})
-
-                    # Do not add the larger fort
-                    return False
-
-                # Proceed to store the fort in the `forts` collection
-                forts_collection.insert_one(fort_data)
-
-                # Prepare bulk operations for `owned_cells` update
-                bulk_operations = []
-                for cell in border_cells:
-                    bulk_operations.append(
-                        UpdateOne(
-                            {"coordinates": cell},
-                            {"$set": {"is_border": True, "is_inner": False, "is_in_fort": True, "fort_id": new_fort_id}},
-                            upsert=True
-                        )
-                    )
-                for cell in inner_cells:
-                    bulk_operations.append(
-                        UpdateOne(
-                            {"coordinates": cell},
-                            {"$set": {"is_border": False, "is_inner": True, "is_in_fort": True, "fort_id": new_fort_id}},
-                            upsert=True
-                        )
-                    )
-                if bulk_operations:
-                    cells_collection.bulk_write(bulk_operations)
-
-                print(f"✅ Fort added to database: {fort_data}")
-                return True  # A valid fort has been detected
-
-    return False  # No fort detected
-
+    try:
+        socketio.emit("fort-detected", json.loads(json.dumps(fort_data, cls=CustomJSONEncoder)))
+    except Exception as e:
+        app.logger.error(f"Error emitting fort-detected: {e}")
+    return True
 
 
 @app.route("/get-grid", methods=["GET"])
@@ -477,7 +482,7 @@ def get_grid():
 
     # Map fort_id to fort_level
     fort_levels = {fort["fort_id"]: fort["level"] for fort in forts}
-
+    print(f"hereeeeeeeeeeeeeee")
     # Add fort_level to each cell if it belongs to a fort
     for cell in cells:
         if "fort_id" in cell and cell["fort_id"] in fort_levels:
@@ -485,55 +490,430 @@ def get_grid():
 
     return jsonify(cells)
 
+
+
+def destroy_fort(fort_id):
+    """Destroy a fort, delete inner cells, and reset border cell properties."""
+    # Fetch the fort details
+    fort = forts_collection.find_one({"fort_id": fort_id})
+    if not fort:
+        print(f"No fort found with ID: {fort_id}")
+        return False
+
+    # Get all inner_cells and border_cells associated with the fort
+    inner_cells = fort.get("inner_cells", [])
+    border_cells = fort.get("border_cells", [])
+
+    # Prepare bulk operations
+    bulk_operations = []
+
+    # Delete inner cells
+    for cell in inner_cells:
+        bulk_operations.append(DeleteOne({"coordinates": cell}))
+
+    # Update border cells
+    for cell in border_cells:
+        bulk_operations.append(
+            UpdateOne(
+                {"coordinates": cell},
+                {"$set": {
+                    "is_border": False,
+                    "is_inner": False,
+                    "is_in_fort": False,
+                    "fort_id": None  # Remove fort association
+                }}
+            )
+        )
+
+    # Execute the bulk operations
+    if bulk_operations:
+        try:
+            result = cells_collection.bulk_write(bulk_operations)
+            print(f"✅ Fort {fort_id} destroyed. Bulk write result: {result.bulk_api_result}")
+        except Exception as e:
+            print(f"❌ Error updating cells for destroyed fort {fort_id}: {e}")
+            return False
+
+    # Remove the fort itself from the database
+    forts_collection.delete_one({"fort_id": fort_id})
+    print(f"✅ Fort {fort_id} removed from database.")
+
+    # Notify clients about the destroyed fort
+    socketio.emit(
+        "fort-destroyed",
+        {
+            "fort_id": fort_id,
+            "affected_cells": {
+                "inner_cells": inner_cells,
+                "border_cells": border_cells,
+            },
+        }
+    )
+
+    return True
+
+
+
 @app.route("/claim-cell", methods=["POST"])
-def claim_cell():
-    """Handle cell clicks."""
+def claim_cell_with_energy():
+    """Handle cell clicks with energy validation."""
     data = request.json
     row, col = data.get("row"), data.get("col")
     user_id = data.get("userId")
+    print(f"🚀 ~ user_id:", user_id)
 
+    if not user_id:
+        return jsonify({"error": "User ID is required"}), 400
+
+    # Fetch user energy details
+    user = users_collection.find_one({"telegram_user_id": int(user_id)})
+    if not user:
+        print("❌ Player not found in the database.")
+        return jsonify({"error": "Player not initialized: User not found"}), 416
+
+    if "energy" not in user:
+        print("❌ Energy data not found for the player.")
+        return jsonify({"error": "Player not initialized: Energy data missing"}), 416
+
+    energy = user["energy"]
+
+    # Retrieve current energy details
+    clicks_in_charge = energy.get("clicks_in_charge", 0)
+    clicks_per_charge = energy.get("clicks_per_charge", 1000000)
+    last_recharge_timestamp = energy.get("last_recharge_timestamp", None)
+    charges = energy.get("charges", 0)
+    max_charges = 4  # Updated maximum charges
+    recharge_duration = 600  # Recharge time in seconds (10 minutes)
+    clicks_per_charge_max = 1000000
+
+    now = datetime.utcnow()
+
+    # Check if charges have reached the maximum and 24 hours have passed
+    if charges >= max_charges:
+        if last_recharge_timestamp:
+            elapsed_hours = (now - last_recharge_timestamp).total_seconds() / 3600
+            if elapsed_hours >= 24:
+                # Reset energy state for the user
+                charges = 0
+                clicks_in_charge = 0
+                clicks_per_charge = 1000000  # Default clicks per charge after reset
+                last_recharge_timestamp = None
+
+                users_collection.update_one(
+                    {"telegram_user_id": int(user_id)},
+                    {
+                        "$set": {
+                            "energy.charges": charges,
+                            "energy.clicks_in_charge": clicks_in_charge,
+                            "energy.clicks_per_charge": clicks_per_charge,
+                        },
+                        "$unset": {"energy.last_recharge_timestamp": ""}
+                    }
+                )
+                print("✅ 24 hours elapsed. Energy reset for the user.")
+            else:
+                print("❌ Max charges reached. Wait for 24 hours to reset.")
+                return jsonify({"error": "Max charges reached. Wait for 24 hours to reset."}), 400
+        else:
+            print("❌ Max charges reached and last recharge timestamp missing.")
+            return jsonify({"error": "Max charges reached. Wait for 24 hours to reset."}), 400
+
+    # Condition 1: If clicks_in_charge >= clicks_per_charge (user exhausted current charge)
+    if clicks_in_charge >= clicks_per_charge:
+        elapsed_seconds = (now - last_recharge_timestamp).total_seconds() if last_recharge_timestamp else 0
+        if elapsed_seconds < recharge_duration:
+            print("❌ Recharge ongoing. Please wait.")
+            return jsonify({"error": "Recharging... Please wait before claiming more cells."}), 400
+
+        if elapsed_seconds >= recharge_duration:
+            if charges < max_charges:
+                charges += 1
+                clicks_in_charge = 0
+                clicks_per_charge = 0
+                last_recharge_timestamp = now
+
+                users_collection.update_one(
+                    {"telegram_user_id": int(user_id)},
+                    {
+                        "$set": {
+                            "energy.charges": charges,
+                            "energy.clicks_in_charge": clicks_in_charge,
+                            "energy.clicks_per_charge": clicks_per_charge,
+                            "energy.last_recharge_timestamp": last_recharge_timestamp,
+                        }
+                    }
+                )
+                print("Charge increased. Please wait for recharge to complete.")
+                return jsonify({"error": "Max clicks reached. Please wait for energy recharge."}), 400
+
+    # Increment clicks_in_charge for valid cases
+    clicks_in_charge += 1
+    if clicks_in_charge >= clicks_per_charge_max:
+        if charges < max_charges:
+            charges += 1
+            clicks_in_charge = 0
+            clicks_per_charge = 0
+            last_recharge_timestamp = now
+
+            users_collection.update_one(
+                {"telegram_user_id": int(user_id)},
+                {
+                    "$set": {
+                        "energy.charges": charges,
+                        "energy.clicks_in_charge": clicks_in_charge,
+                        "energy.clicks_per_charge": clicks_per_charge,
+                        "energy.last_recharge_timestamp": last_recharge_timestamp,
+                    }
+                }
+            )
+            print(f"Charge increased to {charges}. Reset clicks_in_charge and clicks_per_charge.")
+
+    users_collection.update_one(
+        {"telegram_user_id": int(user_id)},
+        {
+            "$set": {
+                "energy.clicks_in_charge": clicks_in_charge,
+                "energy.last_click_timestamp": now,
+            }
+        }
+    )
+    print(f"Click registered. Clicks in charge: {clicks_in_charge}")
+
+    # Claim the cell logic
     cell_coordinates = f"{row}-{col}"
+    cell = cells_collection.find_one({"coordinates": cell_coordinates})
+    if cell:
+        # Determine max level
+        max_level = 2  # Default max level for cells not in a fort
+        if cell.get("is_in_fort"):
+            fort_id = cell.get("fort_id")
+            border_cell_count = cells_collection.count_documents({"fort_id": fort_id, "is_border": True})
+            max_level = border_cell_count * 2
 
-    # Fetch the current cell
-    existing_cell = cells_collection.find_one({"coordinates": cell_coordinates})
+        if cell["user_id"] != user_id:
+            new_level = max(cell.get("level", 0) - 1, 0)
+            if new_level <= 0:
+                cells_collection.delete_one({"coordinates": cell_coordinates})
+                socketio.emit("cell-deleted", {"coordinates": cell_coordinates})
+                if cell.get("is_in_fort"):
+                    destroy_fort(cell.get("fort_id"))
+            else:
+                cells_collection.update_one(
+                    {"coordinates": cell_coordinates},
+                    {"$set": {"level": new_level}}
+                )
+                updated_cell = cells_collection.find_one({"coordinates": cell_coordinates}, {"_id": 0})
+                try:
+                    socketio.emit("cell-updated", updated_cell)
+                    socketio.emit("test-event", {"message": "Test message from server"})
 
-    if existing_cell:
-        # If the cell is owned by the current user, increment its level
-        if existing_cell["user_id"] == user_id:
-            new_level = existing_cell.get("level", 0) + 1
+                    print(f"emiting event")
+                except Exception as e:
+                    print(f"faild", e)
+                    app.logger.error(f"Error emitting cell-updated: {e}")
+        else:
+            current_level = cell.get("level", 0)
+            new_level = min(current_level + 1, max_level)
             cells_collection.update_one(
                 {"coordinates": cell_coordinates},
-                {"$set": {"level": new_level}}
+                {"$set": {"level": new_level, "color": user.get("color")}}
             )
-            print(f"✅ Cell ({row}, {col}) level updated to {new_level} by user {user_id}")
+            updated_cell = cells_collection.find_one({"coordinates": cell_coordinates}, {"_id": 0})
+            
+            try:
+                socketio.emit("cell-updated", updated_cell)
+                socketio.emit("test-event", {"message": "Test message from server"})
 
-            # If the cell is part of a fort, recalculate and update the fort level
-            if "fort_id" in existing_cell:
-                fort_id = existing_cell["fort_id"]
-                fort_level = calculate_fort_level(fort_id)
+                print(f"emiting event")
+            except Exception as e:
+                print(f"faild", e)
+                app.logger.error(f"Error emitting cell-updated: {e}")
+
+            if cell.get("is_in_fort"):
+                updated_fort_level = calculate_fort_level(cell.get("fort_id"))
                 forts_collection.update_one(
-                    {"fort_id": fort_id},
-                    {"$set": {"level": fort_level}}
+                    {"fort_id": cell.get("fort_id")},
+                    {"$set": {"level": updated_fort_level}}
                 )
-                print(f"🔄 Fort ({fort_id}) level updated to {fort_level}")
-        else:
-            return jsonify({"error": "Cell is owned by another user"}), 400
+                socketio.emit("fort-level-updated", {"fort_id": cell.get("fort_id"), "level": updated_fort_level})
     else:
-        # If the cell is not owned, claim it for the user
-        cell_data = {
+        cells_collection.insert_one({
             "coordinates": cell_coordinates,
-            "is_in_fort": False,
             "user_id": user_id,
             "level": 1,
-            "timestamp": datetime.utcnow().isoformat(),
+            "is_in_fort": False,
+            "color": user.get("color"),
+        })
+        updated_cell = cells_collection.find_one({"coordinates": cell_coordinates}, {"_id": 0})
+
+        try:
+            socketio.emit("cell-updated", updated_cell)
+            socketio.emit("test-event", {"message": "Test message from server"})
+
+            print(f"emiting event")
+        except Exception as e:
+            print(f"faild", e)
+            app.logger.error(f"Error emitting cell-updated: {e}")
+    print(f"usr_id:",user_id)
+    detect_and_mark_fort((row, col), user_id)
+
+    return jsonify({
+        "success": True,
+        "energy_remaining": {
+            "charges": charges,
+            "clicks_in_current_charge": clicks_in_charge,
         }
-        cells_collection.insert_one(cell_data)
-        print(f"✅ Cell ({row}, {col}) claimed by user {user_id}")
+    }), 200
 
-    # Detect and mark forts starting from this cell
-    detect_and_mark_fort(start_cell=(row, col))
 
-    return jsonify({"success": True})
+
+@app.route("/calculate-energy", methods=["POST"])
+def calculate_energy_endpoint():
+    """
+    Endpoint to calculate and update energy recharge for a user.
+    """
+    data = request.json
+    user_id = data.get("userId")
+
+    # Fetch user details
+    user = users_collection.find_one({"telegram_user_id": int(user_id)})
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+
+    energy = user.get("energy", {})
+    now = datetime.utcnow()
+    clicks_per_charge = energy.get("clicks_per_charge", 1000000)
+    clicks_per_charge_max = 1000000  # Maximum clicks per charge
+    clicks_in_charge = energy.get("clicks_in_charge", 0)
+    charges = energy.get("charges", 0)
+    last_recharge_timestamp = energy.get("last_recharge_timestamp", None)
+
+    # Check if charges are 4 and 24 hours have passed
+    if charges >= 4:
+        if last_recharge_timestamp:
+            elapsed_hours = (now - last_recharge_timestamp).total_seconds() / 3600
+            if elapsed_hours >= 24:
+                # Reset energy state for the user
+                charges = 0
+                clicks_in_charge = 0
+                clicks_per_charge = 1000000  # Default clicks per charge after reset
+                last_recharge_timestamp = None
+
+                users_collection.update_one(
+                    {"telegram_user_id": int(user_id)},
+                    {
+                        "$set": {
+                            "energy.charges": charges,
+                            "energy.clicks_in_charge": clicks_in_charge,
+                            "energy.clicks_per_charge": clicks_per_charge,
+                        },
+                        "$unset": {"energy.last_recharge_timestamp": ""}
+                    }
+                )
+                print("✅ 24 hours elapsed. Energy reset for the user.")
+
+    # Calculate remaining clicks if charges are not maxed out
+    if charges == 0:
+        # If no charges, calculate remaining clicks
+        remaining_clicks = clicks_per_charge - clicks_in_charge
+    else:
+        # Handle clicks per charge recharge logic
+        remaining_clicks = clicks_per_charge - clicks_in_charge
+        if clicks_per_charge < clicks_per_charge_max:
+            elapsed_seconds = (now - last_recharge_timestamp).total_seconds() if last_recharge_timestamp else 0
+
+            if elapsed_seconds >= 600:  # If 10 minutes have passed
+                clicks_per_charge = clicks_per_charge_max
+                users_collection.update_one(
+                    {"telegram_user_id": int(user_id)},
+                    {"$set": {"energy.clicks_per_charge": clicks_per_charge}}
+                )
+            else:
+                # Calculate recharged clicks
+                recharge_rate = clicks_per_charge_max / 600  # 10 clicks in 10 minutes
+                recharged_clicks = int(elapsed_seconds * recharge_rate)
+                clicks_per_charge = min(clicks_per_charge_max, recharged_clicks)
+
+                # Update the recharged clicks in the database
+                users_collection.update_one(
+                    {"telegram_user_id": int(user_id)},
+                    {"$set": {"energy.clicks_per_charge": clicks_per_charge}}
+                )
+
+    # Calculate remaining clicks again in case of any updates
+    remaining_clicks = clicks_per_charge - clicks_in_charge
+
+    return jsonify({
+        "remaining_clicks": remaining_clicks,
+        "charges": charges
+    }), 200
+
+
+
+def calculate_user_level(user_id):
+    """
+    Calculate the level of a user based on their forts.
+    Formula: (Count of user's forts * Maximum level fort) / 10
+    """
+    # Fetch all forts owned by the user
+    user_forts = list(forts_collection.find({"user_id": user_id}, {"level": 1}))
+
+    if not user_forts:
+        # If user has no forts, return level 0
+        return 0
+
+    # Calculate the maximum fort level and count of forts
+    max_fort_level = max(fort["level"] for fort in user_forts)
+    fort_count = len(user_forts)
+
+    # Calculate the user's level
+    user_level = (fort_count * max_fort_level) / 10
+
+    # Return the integer level
+    return int(user_level)
+
+@app.route("/recharge-energy", methods=["POST"])
+def recharge_energy():
+    """Recharge energy for the player based on elapsed time."""
+    data = request.json
+    user_id = data.get("userId")
+
+    # Fetch user energy details
+    user = users_collection.find_one({"telegram_user_id": int(user_id)})
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+
+    energy = user.get("energy", {})
+    now = datetime.utcnow()
+    clicks_per_charge = energy.get("clicks_per_charge", 1000000)
+    clicks_in_charge = energy.get("clicks_in_charge", 0)
+    charges = energy.get("charges", 0)
+    last_recharge_timestamp = energy.get("last_recharge_timestamp")
+
+    # Energy calculation
+    available_clicks = clicks_per_charge - clicks_in_charge
+    if charges > 0 and last_recharge_timestamp:
+        elapsed_seconds = (now - last_recharge_timestamp).total_seconds()
+        if elapsed_seconds < 600:  # Only calculate if within recharge duration
+            recharge_rate = clicks_per_charge / 600  # 500 clicks in 10 minutes
+            recharged_clicks = int(elapsed_seconds * recharge_rate)
+            available_clicks = min(clicks_per_charge, clicks_in_charge + recharged_clicks) - clicks_in_charge
+
+    # Update energy in the database
+    users_collection.update_one(
+        {"telegram_user_id": int(user_id)},
+        {
+            "$set": {
+                "energy.last_recharge_timestamp": now if charges > 0 else None,
+            }
+        }
+    )
+
+    return jsonify({
+        "success": True,
+        "available_clicks": available_clicks,
+        "charges": charges,
+    }), 200
 
 
 def calculate_fort_level(fort_id):
@@ -543,6 +923,8 @@ def calculate_fort_level(fort_id):
     return min(levels, default=1)
 
 if __name__ == "__main__":
-    bot_thread = Thread(target=start_telegram_bot, daemon=True)
-    bot_thread.start()
-    app.run(debug=True, use_reloader=False)
+    from gevent import monkey
+    monkey.patch_all()
+
+    print("Starting Flask app with gevent...")
+    socketio.run(app, host="0.0.0.0", port=5000)
