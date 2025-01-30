@@ -35,6 +35,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "clicks_per_charge": MAX_CLICK_PER_CHARGE,
         "last_click_timestamp": datetime.utcnow(),
         "last_recharge_timestamp": datetime.utcnow(),
+        "level": 0
     }
 
     random_color_hex = generate_random_color_hex()
@@ -61,6 +62,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "registered_at": datetime.utcnow().isoformat(),
             "energy": initial_energy,
             "color": random_color_hex,
+            "level": 0,
         }
         users_collection.insert_one(user_data)
         await update.message.reply_text(

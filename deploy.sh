@@ -12,7 +12,7 @@ PASSWORD="dZ5YG8iBRu"
 REMOTE_JS_DIR="/var/www/rbiz.pro/frontend/static/js/"
 REMOTE_CSS_DIR="/var/www/rbiz.pro/frontend/static/css/"
 REMOTE_HTML_DIR="/var/www/rbiz.pro/frontend"
-REMOTE_APP_DIR="/var/www/rbiz.pro/backend"
+REMOTE_APP_DIR="/var/www/rbiz.pro/backend/app"
 
 # Local build directory
 BUILD_DIR="./build"

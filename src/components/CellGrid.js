@@ -27,6 +27,7 @@ const CellGrid = ({ gridSize = 2000, cellSize = 20 }) => {
   const [loading, setLoading] = useState(true);
   const [energy, setEnergy] = useState({ charges: 0, remaining_clicks_in_charge: 0 });
   const [userLevel, setUserLevel] = useState(null); // Initialize user level state
+  const [users, setUsers] = useState({}); // Store users in an object for quick lookup
 
 
   // Fetch grid data
@@ -50,12 +51,39 @@ const CellGrid = ({ gridSize = 2000, cellSize = 20 }) => {
     fetchGrid();
   }, []);
 
+
+useEffect(() => {
+  const fetchUsers = async () => {
+    try {
+      const response = await fetch(`${window.location.protocol}//rbiz.pro/api/users`);
+      if (response.ok) {
+        const data = await response.json();
+        console.log("🚀 ~ fetchUsers ~ data:", data)
+        
+        // Convert user array into an object for fast lookup
+        const usersMap = {};
+        data.users.forEach((user) => {
+          usersMap[user.user_id] = { username: user.username, user_level: user.user_level };
+        });
+
+        setUsers(usersMap);
+      } else {
+        console.error("Error fetching users");
+      }
+    } catch (error) {
+      console.error("Error fetching users:", error);
+    }
+  };
+
+  fetchUsers();
+}, []);
+
   useEffect(() => {
     socket.on("connect", () => {
-      console.log("WebSocket connected successfully:", socket.id);
+      // console.log("WebSocket connected successfully:", socket.id);
     });
     socket.on("test-event", (data) => {
-      console.log("Received test-event:", data);
+      // console.log("Received test-event:", data);
     });
     
     socket.on("connect_error", (error) => {
@@ -63,19 +91,19 @@ const CellGrid = ({ gridSize = 2000, cellSize = 20 }) => {
     });
     
     socket.on("disconnect", (reason) => {
-      console.warn("WebSocket disconnected:", reason);
+      // console.warn("WebSocket disconnected:", reason);
     });
     
     socket.on("reconnect_attempt", () => {
-      console.log("Attempting to reconnect...");
+      // console.log("Attempting to reconnect...");
     });
     
     socket.on("reconnect_failed", () => {
-      console.error("WebSocket failed to reconnect.");
+      // console.error("WebSocket failed to reconnect.");
     });
     // Listen for cell updates
     socket.on("cell-updated", (updatedCell) => {
-      console.log("here");
+      // console.log("here");
       
       if (!updatedCell || !updatedCell.coordinates) {
         console.error("Invalid cell data received:", updatedCell);
@@ -93,7 +121,7 @@ const CellGrid = ({ gridSize = 2000, cellSize = 20 }) => {
   
     // Listen for fort destructions
     socket.on("fort-destroyed", ({ fort_id, affected_cells }) => {
-      console.log("Fort destroyed:", fort_id);
+      // console.log("Fort destroyed:", fort_id);
   
       setGrid((prevGrid) => {
         const updatedGrid = { ...prevGrid };
@@ -120,7 +148,7 @@ const CellGrid = ({ gridSize = 2000, cellSize = 20 }) => {
   
     // Listen for fort detections
     socket.on("fort-detected", (fortData) => {
-      console.log("Fort detected:", fortData);
+      // console.log("Fort detected:", fortData);
   
       setGrid((prevGrid) => {
         const updatedGrid = { ...prevGrid };
@@ -160,13 +188,7 @@ const CellGrid = ({ gridSize = 2000, cellSize = 20 }) => {
     });
       // Listen for the "user-recharged" socket event
     socket.on("user-recharged", (data) => {
-      console.log("User recharged:", data);
-      console.log("🚀 ~ socket.on ~ data.user_id:", data.user_id)
-      console.log("🚀 ~ socket.on ~ data.clicks_per_charge:", data.clicks_per_charge)
-      console.log("🚀 ~ socket.on ~ userId:", userId)
-      if (data.user_id === userId) { // Replace with the current user's ID
-        console.log("here111111");
-        
+      if (data.user_id === userId) { // Replace with the current user's ID        
         setEnergy({
           clicks_per_charge: data.clicks_per_charge,
           recharged: data.recharged,
@@ -176,7 +198,7 @@ const CellGrid = ({ gridSize = 2000, cellSize = 20 }) => {
     })
 
     socket.on("fort-level-updated", ({ fort_id, level }) => {
-      console.log(`Fort ${fort_id} level updated to ${level}`);
+      // console.log(`Fort ${fort_id} level updated to ${level}`);
       setGrid((prevGrid) => {
         const updatedGrid = { ...prevGrid };
   
@@ -195,7 +217,7 @@ const CellGrid = ({ gridSize = 2000, cellSize = 20 }) => {
     });
       // Listen for user level updates
     socket.on("user-level-updated", ({ user_id, level }) => {
-      console.log(`User ${user_id} level updated to ${level}`);      
+      // console.log(`User ${user_id} level updated to ${level}`);      
       if (user_id === userId) {
 
         localStorage.setItem("userLevel", userLevel);
@@ -238,12 +260,12 @@ const CellGrid = ({ gridSize = 2000, cellSize = 20 }) => {
           },
         });
   
-        console.log("Response status:", response.status);
+        // console.log("Response status:", response.status);
   
         if (response.ok) {
           if (response.headers.get("Content-Type")?.includes("application/json")) {
             const data = await response.json();
-            console.log("User data:", data);
+            // console.log("User data:", data);
             setUserId(data.userId);
             setUsername(data.username);
           } else {
@@ -329,7 +351,7 @@ const CellGrid = ({ gridSize = 2000, cellSize = 20 }) => {
 
   const verifyLoginCode = async () => {
     try {
-      console.log("Logging in with:", identifier, loginCode);
+      // console.log("Logging in with:", identifier, loginCode);
   
       const response = await fetch(`${window.location.protocol}//rbiz.pro/api/verify-login-code`, {
         method: "POST",
@@ -341,7 +363,7 @@ const CellGrid = ({ gridSize = 2000, cellSize = 20 }) => {
   
       if (response.ok) {
         const data = await response.json(); // Parse JSON directly
-        console.log("Login Successful:", data);
+        // console.log("Login Successful:", data);
   
         // Persist data
         localStorage.setItem("userId", data.user_id);
@@ -363,13 +385,35 @@ const CellGrid = ({ gridSize = 2000, cellSize = 20 }) => {
   
   
   
+  // const handleMouseEnter = (event, cell) => {
+  //   if (cell.is_border && cell.fort_level !== undefined) {
+  //     console.log("cell", cell)
+  //     setHoveredFortLevel(cell.fort_level);
+  //     setTooltipPosition({
+  //       top: event.clientY + 10,
+  //       left: event.clientX + 10,
+  //     });
+  //   }
+  // };
+
   const handleMouseEnter = (event, cell) => {
     if (cell.is_border && cell.fort_level !== undefined) {
       setHoveredFortLevel(cell.fort_level);
+    }
+  
+    // Find user details from global users state
+    if (cell.user_id && users[cell.user_id]) {
+      const { username, user_level } = users[cell.user_id];
+  
+      console.log(`User: ${username}, Level: ${user_level}`);
+      
       setTooltipPosition({
         top: event.clientY + 10,
         left: event.clientX + 10,
       });
+  
+      // Show tooltip with user information
+      setHoveredFortLevel(`User: ${username} (Level: ${user_level}), Fort Level: ${cell.fort_level}`);
     }
   };
 
@@ -393,12 +437,12 @@ const CellGrid = ({ gridSize = 2000, cellSize = 20 }) => {
           },
           body: JSON.stringify({ row, col, userId }),
         });
-        const responseText = await response.text(); // Log the raw response
-        console.log("Response text:", responseText);
+        // const responseText = await response.text(); // Log the raw response
+        // console.log("Response text:", responseText);
 
         if (response.ok) {
           const updatedGrid = await fetch(`${window.location.protocol}//rbiz.pro/api/get-grid`);
-          console.log("🚀 ~ updatedGrid:", updatedGrid)
+          // console.log("🚀 ~ updatedGrid:", updatedGrid)
           const data = await updatedGrid.json();
 
           const gridData = {};
@@ -522,7 +566,6 @@ const CellGrid = ({ gridSize = 2000, cellSize = 20 }) => {
           </div>
         </div>
       )}
-
       {hoveredFortLevel !== null && (
         <div
           className="tooltip"
@@ -531,7 +574,7 @@ const CellGrid = ({ gridSize = 2000, cellSize = 20 }) => {
             left: `${tooltipPosition.left}px`,
           }}
         >
-          Fort Level: {hoveredFortLevel}
+          {hoveredFortLevel}
         </div>
       )}
       <Grid
